@@ -1,5 +1,5 @@
 # 🧠 AI-Powered Email Marketing Automation Tool  
-### Built with Python, AI (Groq/OpenAI), and Problem Solving @ Dynamic Leo
+### Built with Python, AI (Groq/OpenAI), and Problem Solving
 
 ---
 
