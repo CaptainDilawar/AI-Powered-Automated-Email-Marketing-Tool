@@ -36,7 +36,7 @@ DORK_PATTERNS = [
 def get_user_inputs():
     """Gets all the necessary inputs from the user AND CORRECTLY SPLITS THEM."""
     service = input("Enter the service you want to sell (e.g., website development): ")
-    industries_str = input("Enter target industries (comma separated, e.g., real estate,insurance,lawyer): ")
+    industries_str = input("Enter target industries (comma separated, e.g., Real Estate,Clinic,Law Firm, Restaurant, E-commerce, Fitness, Education): ")
     locations_str = input("Enter target states/locations (comma separated, e.g., California,Texas,Florida): ")
     platforms_str = input("Enter platforms to target (comma separated, e.g., yelp,instagram,linkedin,google): ")
 

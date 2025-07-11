@@ -132,16 +132,19 @@ def generate_from_groq(prompt):
         print(f"❌ Groq API error: {e}")
         return "ERROR", "ERROR"
 
-def convert_to_html(text):
+def convert_to_html(text, lead_id):
     lines = text.strip().splitlines()
     html = "<p>" + "</p><p>".join(line.strip() for line in lines if line.strip()) + "</p>"
-    return html
+    # Add tracking pixel for email opens
+    tracking_pixel = f'<img src="http://localhost:5000/track_open?lead_id={lead_id}" width="1" height="1" alt="" style="display:none;">'
+    return html + tracking_pixel
 
 def main():
     input_file = "test_leads.csv"
     output_file = "personalized_emails_groq.csv"
 
     df = pd.read_csv(input_file)
+    df['Lead ID'] = df.index + 1
     df['Email Subject'] = ""
     df['Generated Email'] = ""
     df['Email HTML'] = ""
@@ -151,7 +154,7 @@ def main():
     for i in tqdm(df.index):
         prompt = create_prompt(df.loc[i])
         subject, email = generate_from_groq(prompt)
-        email_html = convert_to_html(email)
+        email_html = convert_to_html(email, lead_id=df.loc[i, 'Lead ID'])
 
         print(f"\n Lead {i+1}")
         print(f"Subject: {subject}")
