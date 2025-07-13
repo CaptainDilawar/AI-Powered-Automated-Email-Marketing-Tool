@@ -10,7 +10,18 @@ from selenium.common.exceptions import TimeoutException
 import time
 from itertools import product
 from tqdm import tqdm
+import os
 import random
+import sys
+from pathlib import Path
+
+if len(sys.argv) < 2:
+    print("Usage: python scraper.py <username>")
+    sys.exit(1)
+
+user = sys.argv[1]
+data_path = Path(f"data/{user}").resolve()
+Path(data_path).mkdir(parents=True, exist_ok=True)
 
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -188,23 +199,25 @@ if __name__ == "__main__":
 
         service, platforms, industries, locations = get_user_inputs()
         all_combinations = list(product(platforms, industries, locations))
-        
+
         if not all_combinations:
             print("No combinations to search.")
         else:
             print(f"Created a to-do list of {len(all_combinations)} individual searches.")
             all_leads = scrape_google(driver, all_combinations)
-            
+
             if all_leads:
                 df = pd.DataFrame(all_leads)
                 df.drop_duplicates(subset=["Email", "Name"], inplace=True)
-                # filename = f"leads_{service.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                filename = "test_leads.csv"
+
+                # ✅ Save to your current structure
+                filename = data_path/"leads.csv"
                 df.to_csv(filename, index=False)
+
                 print(f"\nSUCCESS: All tasks finished. {len(df)} unique leads saved to {filename}")
             else:
                 print("\nScraping finished, but no leads were found matching the criteria.")
-            
+
     except Exception as e:
         print(f"\nAn unexpected error occurred in the main script: {e}")
     finally:

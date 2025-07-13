@@ -1,0 +1,14 @@
+pandas
+requests
+python-dotenv
+tqdm
+email-validator
+flask
+streamlit
+altair
+imapclient
+pyzmail36
+selenium
+beautifulsoup4
+certifi
+streamlit-authenticator

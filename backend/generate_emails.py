@@ -5,13 +5,25 @@ import os
 import json
 from dotenv import load_dotenv
 import csv
+import sys
+from pathlib import Path
+
+if len(sys.argv) < 2:
+    print("Usage: python generate_emails.py <username>")
+    sys.exit(1)
+
+user = sys.argv[1]
+data_path = Path(f"data/{user}").resolve()
+Path(data_path).mkdir(parents=True, exist_ok=True)
 
 # Load API key
-load_dotenv()
+env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # Load sender info
-with open("sender_config.json", "r", encoding="utf-8") as f:
+sender_config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "sender_config.json"))
+with open(sender_config_path, "r", encoding="utf-8") as f:
     SENDER_INFO = json.load(f)
 
 # Basic mapping of industries to professional titles
@@ -23,9 +35,7 @@ INDUSTRY_ROLES = {
     "E-commerce": "E-commerce Owner",
     "Fitness": "Gym Owner",
     "Education": "School Administrator"
-    # Add more mappings as needed
 }
-
 DEBUG_PRINT = False
 
 def create_prompt(row, service="Website Development"):
@@ -63,7 +73,7 @@ Details:
 - Profile Description: "{description or 'N/A'}"
 
 The email should:
-- Mention they don’t have a website
+- Mention they don't have a website
 - Be personalized to their industry and location
 - Be friendly, professional, and concise
 - Start the email with: "Hi {title_with_location},"
@@ -85,6 +95,8 @@ Email:
     return prompt.strip()
 
 
+import time
+
 def generate_from_groq(prompt):
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -100,37 +112,41 @@ def generate_from_groq(prompt):
         "max_tokens": 600
     }
 
-    try:
-        r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
-        result = r.json()
+    for attempt in range(3):
+        try:
+            r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
+            result = r.json()
 
-        if "choices" not in result or not result["choices"]:
-            print("❌ Unexpected API response format:", result)
-            return "ERROR", "ERROR"
+            if "error" in result and "rate_limit_exceeded" in result.get("error", {}).get("code", ""):
+                wait_time = 5 * (attempt + 1)
+                print(f"⏳ Rate limit hit. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
 
-        content = result["choices"][0]["message"]["content"].strip()
+            if "choices" not in result or not result["choices"]:
+                print("❌ Unexpected API response format:", result)
+                return "ERROR", "ERROR"
 
-        if DEBUG_PRINT:
-            print("---- RAW RESPONSE ----")
-            print(content)
-            print("----------------------\n")
+            content = result["choices"][0]["message"]["content"].strip()
 
-        # Extract subject and body
-        subject = "N/A"
-        body = content
-        lines = content.splitlines()
-        for i, line in enumerate(lines):
-            if line.lower().startswith("subject:"):
-                subject = line.replace("Subject:", "").strip()
-            elif line.lower().startswith("email:"):
-                body = "\n".join(lines[i+1:]).strip()
-                break
+            subject = "N/A"
+            body = content
+            lines = content.splitlines()
+            for i, line in enumerate(lines):
+                if line.lower().startswith("subject:"):
+                    subject = line.replace("Subject:", "").strip()
+                elif line.lower().startswith("email:"):
+                    body = "\n".join(lines[i+1:]).strip()
+                    break
 
-        return subject, body
+            return subject, body
 
-    except Exception as e:
-        print(f"❌ Groq API error: {e}")
-        return "ERROR", "ERROR"
+        except Exception as e:
+            print(f"❌ Groq API error: {e}")
+            time.sleep(3)
+
+    return "ERROR", "ERROR"
+
 
 def convert_to_html(text, lead_id):
     lines = text.strip().splitlines()
@@ -140,8 +156,8 @@ def convert_to_html(text, lead_id):
     return html + tracking_pixel
 
 def main():
-    input_file = "test_leads.csv"
-    output_file = "personalized_emails_groq.csv"
+    input_file = f"{data_path}/leads.csv"
+    output_file = f"{data_path}/generated_emails.csv"
 
     df = pd.read_csv(input_file)
     df['Lead ID'] = df.index + 1

@@ -1,0 +1,4 @@
+name,username,password,email,is_admin
+Admin User,admin,$2b$12$1eFSjVY/lRyickUChfRp2egMoea9wvNlNDK0QcRvVmYwAGhbN25nm,admin@localhost,1
+Dilawar,dilawar123,$2b$12$D8tU5X.p1cxewOuBqf6ikezCvG7Z4iN/PsdcUh7zOrBRsLVTvnhsu,dilawar@outlook.com,0
+Akram,akram123,$2b$12$9.wGNJZ5OIAAV6qLNHhjq.CKPruhEbWcCHCwMmi0nh.iV.Zei3bu.,akram@outlook.com,0
