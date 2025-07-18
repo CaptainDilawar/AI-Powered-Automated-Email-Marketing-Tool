@@ -154,48 +154,50 @@ if sent_log_path.exists():
     st.download_button("📊 Export as Excel", data=towrite.read(), file_name=f"{selected_campaign}.xlsx")
 
     # Optional PDF button
-    if st.button("📄 Export to PDF"):
-        try:
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-            from reportlab.lib.pagesizes import letter
-            from reportlab.lib import colors
-            from reportlab.lib.styles import getSampleStyleSheet
-            import io
+if st.button("📄 Export to PDF (Stable)"):
+    try:
+        from reportlab.lib.pagesizes import letter, landscape
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+        from reportlab.lib.styles import getSampleStyleSheet
 
-            buffer = io.BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=letter)
-            elements = []
+        from io import BytesIO
+        buffer = BytesIO()
 
-            styles = getSampleStyleSheet()
-            elements.append(Paragraph("Campaign Report", styles['Title']))
-            elements.append(Spacer(1, 12))
+        selected_columns = [
+            "Name", "Email", "Platform Source", "State", "Industry",
+            "Email Subject", "Reply Sentiment", "Opened"
+        ]
+        data = filtered_df[selected_columns].fillna("").values.tolist()
+        headers = selected_columns
+        data.insert(0, headers)
 
-            # Prepare table data
-            data = [filtered_df.columns.tolist()] + filtered_df.astype(str).values.tolist()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+        style = getSampleStyleSheet()
 
-            table = Table(data)
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('FONTSIZE', (0, 1), (-1, -1), 9),
-            ]))
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#eeeeee")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor("#333333")),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+            ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+        ]))
 
-            elements.append(table)
-            doc.build(elements)
-            buffer.seek(0)
+        story = [Paragraph(f"Campaign Report: {selected_campaign}", style["Title"]), table]
+        doc.build(story)
 
-            st.download_button(
-                label="📄 Download PDF",
-                data=buffer,
-                file_name=f"{selected_campaign}.pdf",
-                mime="application/pdf"
-            )
-        except Exception as e:
-            st.error(f"PDF generation failed: {e}")
+        buffer.seek(0)
+        st.download_button(
+            label="📄 Download Campaign Report PDF",
+            data=buffer,
+            file_name=f"{selected_campaign}_summary.pdf",
+            mime="application/pdf"
+        )
+    except Exception as e:
+        st.error(f"PDF generation failed: {e}")
 
 
     # Charts
