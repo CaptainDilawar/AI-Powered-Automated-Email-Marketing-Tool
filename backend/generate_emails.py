@@ -7,26 +7,32 @@ from dotenv import load_dotenv
 import csv
 import sys
 from pathlib import Path
+import time
 
-if len(sys.argv) < 2:
+# --------- Get username ---------
+if len(sys.argv) < 3:
     print("Usage: python generate_emails.py <username>")
     sys.exit(1)
 
 user = sys.argv[1]
-data_path = Path(f"data/{user}").resolve()
-Path(data_path).mkdir(parents=True, exist_ok=True)
-
-# Load API key
+campaign = sys.argv[2]
+data_path = Path(f"data/{user}/campaigns/{campaign}").resolve()
+data_path.mkdir(parents=True, exist_ok=True)
+# --------- Load API Key ---------
 env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Load sender info
-sender_config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "sender_config.json"))
+# --------- Load Sender Info (User-specific) ---------
+sender_config_path = Path(f"data/{user}/sender_config.json")
+if not sender_config_path.exists():
+    print(f"❌ Sender config not found for user '{user}'. Please set it from the Sender Settings UI.")
+    sys.exit(1)
+
 with open(sender_config_path, "r", encoding="utf-8") as f:
     SENDER_INFO = json.load(f)
 
-# Basic mapping of industries to professional titles
+# --------- Industry Role Mapping ---------
 INDUSTRY_ROLES = {
     "Real Estate": "Real Estate Manager",
     "Clinic": "Clinic Manager",
@@ -36,10 +42,9 @@ INDUSTRY_ROLES = {
     "Fitness": "Gym Owner",
     "Education": "School Administrator"
 }
-DEBUG_PRINT = False
 
 def create_prompt(row, service="Website Development"):
-    # Sender details from config
+    # Sender details from user config
     company_name = SENDER_INFO["company_name"]
     sender_name = SENDER_INFO["sender_name"]
     sender_email = SENDER_INFO["sender_email"]
@@ -52,7 +57,6 @@ def create_prompt(row, service="Website Development"):
     platform = row['Platform Source']
     description = str(row.get('Profile Description', '') or '').strip()
 
-    # Create professional role + location
     role_title = INDUSTRY_ROLES.get(industry, f"{industry} Professional")
     title_with_location = f"{role_title} in {state}"
 
@@ -93,9 +97,6 @@ Email:
 [email body]
 """
     return prompt.strip()
-
-
-import time
 
 def generate_from_groq(prompt):
     headers = {
@@ -147,17 +148,15 @@ def generate_from_groq(prompt):
 
     return "ERROR", "ERROR"
 
-
 def convert_to_html(text, lead_id):
     lines = text.strip().splitlines()
     html = "<p>" + "</p><p>".join(line.strip() for line in lines if line.strip()) + "</p>"
-    # Add tracking pixel for email opens
     tracking_pixel = f'<img src="http://localhost:5000/track_open?lead_id={lead_id}" width="1" height="1" alt="" style="display:none;">'
     return html + tracking_pixel
 
 def main():
-    input_file = f"{data_path}/leads.csv"
-    output_file = f"{data_path}/generated_emails.csv"
+    input_file = data_path / "leads.csv"
+    output_file = data_path / "generated_emails.csv"
 
     df = pd.read_csv(input_file)
     df['Lead ID'] = df.index + 1
@@ -172,10 +171,10 @@ def main():
         subject, email = generate_from_groq(prompt)
         email_html = convert_to_html(email, lead_id=df.loc[i, 'Lead ID'])
 
-        print(f"\n Lead {i+1}")
+        print(f"\nLead {i+1}")
         print(f"Subject: {subject}")
-        print(f"Email: {email[:100]}...")  # Preview
-        print(f"HTML: {email_html[:100]}...")  # Preview
+        print(f"Email: {email[:100]}...")
+        print(f"HTML: {email_html[:100]}...")
 
         df.at[i, 'Email Subject'] = subject
         df.at[i, 'Generated Email'] = email

@@ -7,16 +7,18 @@ import os
 import sys
 from pathlib import Path
 
-# --------- Get username ---------
-if len(sys.argv) < 2:
-    print("Usage: python send_emails.py <username>")
+# --------- CLI Arguments ---------
+if len(sys.argv) < 3:
+    print("Usage: python send_emails.py <username> <campaign>")
     sys.exit(1)
 
 user = sys.argv[1]
-data_path = Path(f"data/{user}").resolve()
+campaign = sys.argv[2]
+
+data_path = Path(f"data/{user}/campaigns/{campaign}").resolve()
 data_path.mkdir(parents=True, exist_ok=True)
 
-# --------- Load SMTP credentials ---------
+# --------- Load SMTP credentials from .env ---------
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 SMTP_SERVER = os.getenv("SMTP_SERVER")
 SMTP_PORT = int(os.getenv("SMTP_PORT"))
@@ -24,14 +26,14 @@ SMTP_USERNAME = os.getenv("SMTP_USERNAME")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 REPLY_TO_EMAIL = os.getenv("REPLY_TO_EMAIL")
 
-# --------- Load the generated emails ---------
+# --------- Load generated email content ---------
 input_path = data_path / "generated_emails.csv"
 df = pd.read_csv(input_path)
 df['Delivery Status'] = ""
 
 print(f"\n📤 Sending {len(df)} emails via SMTP...\n")
 
-# --------- Set up SMTP connection ---------
+# --------- Setup SMTP server ---------
 server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
 server.starttls()
 server.login(SMTP_USERNAME, SMTP_PASSWORD)
@@ -69,7 +71,7 @@ for i, row in df.iterrows():
 
 server.quit()
 
-# --------- Save the output ---------
+# --------- Save results ---------
 output_path = data_path / "personalized_emails_sent.csv"
 df.to_csv(output_path, index=False)
 print(f"\n✅ All done. Delivery statuses saved to '{output_path}'")

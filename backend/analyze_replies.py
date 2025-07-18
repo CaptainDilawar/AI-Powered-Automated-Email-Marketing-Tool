@@ -2,32 +2,17 @@ import pandas as pd
 from imapclient import IMAPClient
 import pyzmail
 import os
-import sys
 import requests
 from dotenv import load_dotenv
 from pathlib import Path
 
-# --------- Get username ---------
-if len(sys.argv) < 2:
-    print("Usage: python analyze_replies.py <username>")
-    sys.exit(1)
-BASE_DIR = Path(__file__).resolve().parent.parent
-user = sys.argv[1]
-data_path = BASE_DIR / "data" / user
-data_path.mkdir(parents=True, exist_ok=True)
-
-# --------- Load environment variables ---------
+# Load environment variables once
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
 EMAIL = os.getenv("EMAIL")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.gmail.com")
-SENT_LOG = data_path / "personalized_emails_sent.csv"
-REPLY_LOG = data_path / "reply_analysis.csv"
 
-# --------- Groq API for classifying reply ---------
 def classify_reply_text(reply_text):
     prompt = f"""You are a sales assistant. Classify the following email reply into one of the following categories:
 - Positive (interested or wants to connect)
@@ -39,12 +24,10 @@ Reply:
 
 Just return: Positive, Neutral, or Negative.
 """
-
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-
     data = {
         "model": "llama3-8b-8192",
         "messages": [
@@ -64,19 +47,23 @@ Just return: Positive, Neutral, or Negative.
         print(f"❌ Error classifying reply: {e}")
         return "Unknown"
 
-# --------- Analyze replies in Gmail inbox ---------
-def analyze_replies(user):
-    if not SENT_LOG.exists():
-        print(f"❌ Sent email log not found: {SENT_LOG}")
+def analyze_replies(user, campaign):
+    base_path = Path(__file__).resolve().parent.parent
+    campaign_path = base_path / "data" / user / "campaigns" / campaign
+    campaign_path.mkdir(parents=True, exist_ok=True)
+
+    sent_log = campaign_path / "personalized_emails_sent.csv"
+    reply_log = campaign_path / "reply_analysis.csv"
+
+    if not sent_log.exists():
+        print(f"❌ Sent email log not found: {sent_log}")
         return
 
-    df = pd.read_csv(SENT_LOG)
+    df = pd.read_csv(sent_log)
     df['Reply Text'] = ''
     df['Reply Sentiment'] = ''
 
-    # ✅ Extract recipient emails from the sent log
     known_recipients = df['Email'].dropna().unique().tolist()
-
     if not known_recipients:
         print("⚠️ No recipient emails found in sent log.")
         return
@@ -85,7 +72,6 @@ def analyze_replies(user):
         client.login(EMAIL, EMAIL_PASSWORD)
         client.select_folder('INBOX', readonly=False)
 
-        # ✅ Build IMAP search query for replies FROM known recipients only
         search_query = ['OR'] * (len(known_recipients) - 1)
         for email in known_recipients:
             search_query.append('FROM')
@@ -113,17 +99,24 @@ def analyze_replies(user):
                         idx = match.index[0]
                         df.at[idx, 'Reply Text'] = reply_text
                         df.at[idx, 'Reply Sentiment'] = sentiment
-                        print(f"✅ Reply from {sender_email} classified as {sentiment}")
+                        print(f"✅ Reply from {sender_email} → {sentiment}")
                     else:
-                        print(f"⚠️ Reply from unrecognized email: {sender_email}")
+                        print(f"⚠️ Reply from unknown sender: {sender_email}")
                 except Exception as e:
                     print(f"⚠️ Error decoding reply from {sender_email}: {e}")
 
-    # ✅ Save results
-    df.to_csv(SENT_LOG, index=False)
-    df.to_csv(REPLY_LOG, index=False)
-    print("\n✅ Replies analyzed and logs saved.")
+    df.to_csv(sent_log, index=False)
+    df.to_csv(reply_log, index=False)
+    print("\n✅ Replies analyzed and saved.")
 
-# --------- Main Entry ---------
+# ---- CLI Entry Point ----
 if __name__ == "__main__":
-    analyze_replies(user)
+    import sys
+
+    if len(sys.argv) < 3:
+        print("Usage: python analyze_replies.py <username> <campaign>")
+        sys.exit(1)
+
+    user = sys.argv[1]
+    campaign = sys.argv[2]
+    analyze_replies(user, campaign)
