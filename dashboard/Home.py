@@ -8,6 +8,7 @@ import json
 import shutil
 from io import BytesIO
 from xlsxwriter import Workbook
+import reportlab
 import base64
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -153,17 +154,49 @@ if sent_log_path.exists():
     st.download_button("📊 Export as Excel", data=towrite.read(), file_name=f"{selected_campaign}.xlsx")
 
     # Optional PDF button
-    if st.button("📄 Export to PDF (Experimental)"):
+    if st.button("📄 Export to PDF"):
         try:
-            import pdfkit
-            html_content = filtered_df.to_html(index=False)
-            pdfkit.from_string(html_content, "report.pdf")
-            with open("report.pdf", "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-            href = f'<a href="data:application/octet-stream;base64,{b64}" download="{selected_campaign}.pdf">📄 Download PDF</a>'
-            st.markdown(href, unsafe_allow_html=True)
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.pagesizes import letter
+            from reportlab.lib import colors
+            from reportlab.lib.styles import getSampleStyleSheet
+            import io
+
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=letter)
+            elements = []
+
+            styles = getSampleStyleSheet()
+            elements.append(Paragraph("Campaign Report", styles['Title']))
+            elements.append(Spacer(1, 12))
+
+            # Prepare table data
+            data = [filtered_df.columns.tolist()] + filtered_df.astype(str).values.tolist()
+
+            table = Table(data)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ]))
+
+            elements.append(table)
+            doc.build(elements)
+            buffer.seek(0)
+
+            st.download_button(
+                label="📄 Download PDF",
+                data=buffer,
+                file_name=f"{selected_campaign}.pdf",
+                mime="application/pdf"
+            )
         except Exception as e:
             st.error(f"PDF generation failed: {e}")
+
 
     # Charts
     if "Reply Sentiment" in df.columns:

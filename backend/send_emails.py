@@ -5,6 +5,7 @@ from email.mime.text import MIMEText
 from dotenv import load_dotenv
 import os
 import sys
+import json
 from pathlib import Path
 
 # --------- CLI Arguments ---------
@@ -24,10 +25,23 @@ SMTP_SERVER = os.getenv("SMTP_SERVER")
 SMTP_PORT = int(os.getenv("SMTP_PORT"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-REPLY_TO_EMAIL = os.getenv("REPLY_TO_EMAIL")
+
+# --------- Load reply-to email from sender_config.json ---------
+sender_config_path = Path(f"data/{user}/sender_config.json")
+if not sender_config_path.exists():
+    print(f"❌ sender_config.json not found for user: {user}")
+    sys.exit(1)
+
+with open(sender_config_path, "r") as f:
+    sender_config = json.load(f)
+reply_to_email = sender_config.get("reply_to_email", SMTP_USERNAME)
 
 # --------- Load generated email content ---------
 input_path = data_path / "generated_emails.csv"
+if not input_path.exists():
+    print(f"❌ generated_emails.csv not found in campaign folder.")
+    sys.exit(1)
+
 df = pd.read_csv(input_path)
 df['Delivery Status'] = ""
 
@@ -54,12 +68,10 @@ for i, row in df.iterrows():
         msg["Subject"] = subject
         msg["From"] = SMTP_USERNAME
         msg["To"] = recipient
-        msg["Reply-To"] = REPLY_TO_EMAIL
+        msg["Reply-To"] = reply_to_email
 
-        part1 = MIMEText(body_text, "plain")
-        part2 = MIMEText(body_html, "html")
-        msg.attach(part1)
-        msg.attach(part2)
+        msg.attach(MIMEText(body_text, "plain"))
+        msg.attach(MIMEText(body_html, "html"))
 
         server.sendmail(SMTP_USERNAME, recipient, msg.as_string())
         df.at[i, 'Delivery Status'] = "Sent"
