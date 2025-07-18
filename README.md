@@ -1,44 +1,42 @@
-# AI-Powered-Automated-Email-Marketing-Tool
-AI powered automated marketing tool for agencies.
 # 🤖 AI-Powered Automated Email Marketing Tool
 
-This is a full-stack solution for running personalized cold email campaigns using AI. It scrapes leads from Google, generates emails using GPT-based models, sends emails via SMTP, tracks opens and replies, and provides a web-based dashboard (built with Streamlit) for monitoring campaign performance.
+This is a full-stack solution for running personalized cold email campaigns using AI. It scrapes leads from Google, generates emails using LLMs, sends them, tracks opens, and analyzes replies — all from a graphical interface powered by Streamlit.
 
 ---
 
 ## 📦 Features
 
-- 🔍 Lead scraping with Google dorking
-- 🧠 Email generation using AI (Groq + LLaMA3)
-- ✉️ Automated SMTP email sending
-- 📬 Open tracking and reply analysis
-- 🧾 Sentiment classification of replies
-- 🧑‍💼 Admin and user roles with authentication
-- 📊 Streamlit-based campaign dashboard
+- 🔍 Google-based lead scraping
+- 🧠 AI-generated emails (Groq + LLaMA3)
+- ✉️ Auto email sending (SMTP)
+- 📬 Open tracking & sentiment classification
+- 🧑‍💼 Multi-user dashboard (login & campaign selection)
+- 📊 Visual reporting via Streamlit UI
 
 ---
 
 ## ⚙️ Project Structure
 
+.
 ├── backend/
-│ ├── scraper.py # Google scraper with CAPTCHA handling
-│ ├── generate_emails.py # Email generation using AI
-│ ├── send_emails.py # SMTP-based email sending
-│ ├── analyze_replies.py # Fetch replies + classify with Groq
-│ └── run_campaign.py # Runs full 5-step pipeline
-│
-├── dashboard/
-│ └── Home.py # Streamlit dashboard for campaign results
+│ ├── scraper.py
+│ ├── generate_emails.py
+│ ├── send_emails.py
+│ ├── analyze_replies.py
+│ └── run_campaign.py
 │
 ├── server/
-│ └── open_tracker.py # Flask-based open tracking server
+│ └── open_tracker.py
 │
-├── users.csv # User registry (username, password, admin role)
-├── start_app.py # Starts server + Streamlit dashboard
-├── .env # Environment credentials
+├── dashboard/
+│ └── Home.py
+│
+├── start_app.py
+├── .env
+├── users.csv
 └── data/
 └── <username>/
-├── sender_config.json # Sender info (email, company, etc.)
+├── sender_config.json
 └── campaigns/
 └── <campaign_name>/
 ├── campaign_config.json
@@ -47,154 +45,110 @@ This is a full-stack solution for running personalized cold email campaigns usin
 ├── reply_analysis.csv
 └── opens_log.csv
 
-yaml
-Copy
-Edit
 
 ---
 
 ## 🛠️ Setup Instructions
 
-### 1. 🐍 Python Environment
+### 1. 📦 Install Python Dependencies
 
-Install Python 3.10+ and required packages:
+Install Python 3.10+ and dependencies:
 
 ```bash
 pip install -r requirements.txt
-Example packages you'll need:
 
-txt
-Copy
-Edit
-streamlit
-selenium
-pandas
-imapclient
-pyzmail
-flask
-requests
-python-dotenv
-xlsxwriter
-2. 🔐 Configure .env
-Create a .env file in the root with:
+Or manually install the important ones:
 
-env
-Copy
-Edit
-SMTP_USERNAME=youremail@gmail.com
-SMTP_PASSWORD=yourapppassword
-IMAP_SERVER=imap.gmail.com
-GROQ_API_KEY=your_groq_api_key
-💡 For Gmail, enable IMAP and create an App Password if 2FA is enabled.
+pip install streamlit selenium pandas flask imapclient pyzmail requests python-dotenv xlsxwriter
 
-3. 👤 Add User
-Edit users.csv:
+2. 🔐 Environment Variables
+Create a .env file in the root:
+GROQ_API_KEY = "gsk-afafadfkdfdfsdfhsdjhsdfhsdjkhfkdhf" #Take it from https://console.groq.com/keys
+#smtp brevo
+SMTP_SERVER = "smtp-relay.brevo.com" # SMTP Credentials from brevo.com. Through this server emails will be sent
+SMTP_PORT = 587
+SMTP_USERNAME = "yourmail@gmail.com"
+SMTP_PASSWORD ="yoursmtp-password"
+REPLY_TO_EMAIL = "yourmail@gmail.com" #Mail on which you want to get replies from the campagins
+# IMAP settings for Gmail
+IMAP_SERVER= "imap.gmail.com" #server through which you will recieve replies
+EMAIL="yourmail@gmail.com" 
+EMAIL_PASSWORD="askeliwiosnvbhis" # A 16 digits password from google. Take it from myaccounts.google.com
 
-csv
-Copy
-Edit
-username,password,name,email,is_admin
-dilawar123,securepass,Dilawar,dilawar@example.com,True
-4. 📨 Setup Sender Configuration
-Run the app once and go to Sender Settings in the sidebar to configure:
+3. 👤 Register Users
+Edit users.csv with your details:
+Credentials with which you login first
+name,username,password,name,email,is_admin
+Admin User,admin,$2b$12$1eFSjVY/lRyickUChfRp2egMoea9wvNlNDK0QcRvVmYwAGhbN25nm,admin@localhost,1 #Hashed Password
 
-json
-Copy
-Edit
-{
-  "sender_name": "Dilawar",
-  "company_name": "WebGrow Solutions",
-  "sender_email": "dilawar@example.com",
-  "website": "https://webgrow.io",
-  "phone": "+123456789"
-}
-This will be saved in:
+4. 🧑‍💼 Start App & Login
+Start the app with:
 
-Edit
-data/<username>/sender_config.json
-5. 🎯 Create a Campaign
-Go to the Streamlit dashboard and create a campaign by choosing:
-
-Service (e.g., Website Design)
-
-Platforms (e.g., yelp, linkedin)
-
-Target Industries (e.g., Real Estate, Clinics)
-
-Locations (e.g., California, Texas)
-
-A campaign_config.json will be saved in:
-
-php-template
-Copy
-Edit
-data/<username>/campaigns/<campaign_name>/
-🚀 Run the Application
-bash
-Copy
-Edit
 python start_app.py
-This will:
+It will ask for your username.
 
-Start the open tracker server
+Start the tracker server.
 
-Ask for your username
+Launch the Streamlit dashboard at http://localhost:8501
 
-Run the full 5-step pipeline:
+5. ⚙️ Configure Sender Profile
+Once logged in, go to Sender Settings in the dashboard sidebar and save:
 
-Scraper
+Sender name
 
-AI Email Generator
+Company name
 
-SMTP Sender
+Email
 
-Open Tracker Merge
+Website
 
-Reply Analyzer
+Phone number
 
-Launch the Streamlit dashboard on http://localhost:8501
+Saved at:
 
-✅ Full Workflow
-Scraping: Uses Google dorks to find leads with emails
+data/<username>/sender_config.json
+6. 🎯 Create a Campaign
+Use the Campaign Manager tab:
 
-Email Generation: GPT-based AI generates personalized emails
+Set your service
 
-Sending: Emails are sent using your configured SMTP account
+Choose target industries, states, and platforms
 
-Open Tracking: A pixel-based tracker logs when leads open your email
+Campaign saved to:
 
-Reply Classification: Replies are pulled via IMAP and classified as Positive / Neutral / Negative
+data/<username>/campaigns/<campaign_name>/campaign_config.json
 
-🧪 CAPTCHA Handling
-If CAPTCHA is triggered on Google, the scraper will pause for 45 seconds
+🚀 Campaign Workflow
+Each campaign goes through the following automated stages:
 
-You can solve it manually, and the script will resume scraping automatically
+Lead Scraping from Google using advanced dorks
 
-📁 Output Files
-Each campaign will include:
+Email Generation using AI (Groq / LLaMA3)
 
-leads.csv: Scraped leads
+SMTP Sending using the sender config
 
-personalized_emails_sent.csv: Final sent logs
+Open Tracking merged into final report
 
-reply_analysis.csv: Replies + sentiment
+Reply Analysis with sentiment classification
 
-opens_log.csv: Leads who opened the email
+All results are saved in the campaign folder.
 
-🔐 Admin Dashboard
-Admins can view:
+🧠 CAPTCHA Handling
+If Google CAPTCHA appears, the script waits for 45 seconds to let you solve it. No need to press Enter manually.
 
-All registered users
-
-Total campaigns and emails sent by each user
+📁 Key Output Files
+File	Description
+leads.csv	All scraped leads
+personalized_emails_sent.csv	Emails that were generated and sent
+reply_analysis.csv	Replies with classified sentiment
+opens_log.csv	Open tracking log
 
 🧯 Troubleshooting
-CAPTCHA loops: Use residential proxies or rotate user agents
+❌ CAPTCHA blocking: Try using VPN or wait before rerunning
 
-Invalid credentials: Check your SMTP / IMAP login details
+❌ Invalid SMTP login: Make sure .env has correct credentials
 
-No leads scraped: Adjust dork patterns or keywords
+❌ No leads scraped: Change industries/platforms/locations
 
-📌 Author
-Built by DynamicLeo 🚀
-
+👨‍💻 Developed by
+DynamicLeo
