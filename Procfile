@@ -1,1 +1,1 @@
-scraper: python backend/scraper.py
+web: python backend/scraper.py
