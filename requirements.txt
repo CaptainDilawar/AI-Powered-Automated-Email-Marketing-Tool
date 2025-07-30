@@ -1,5 +1,5 @@
 streamlit
-streamlit-authenticator
+streamlit-authenticator==0.1.5
 pandas
 requests
 python-dotenv
@@ -15,4 +15,3 @@ certifi
 sqlalchemy
 xlsxwriter
 reportlab
-flask
