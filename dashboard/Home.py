@@ -2,87 +2,153 @@ import streamlit as st
 import subprocess
 import pandas as pd
 import os
-from pathlib import Path
 import sys
-import json
-import shutil
+from pathlib import Path
 from io import BytesIO
 from xlsxwriter import Workbook
-import reportlab
-import base64
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+from sqlalchemy import text
 
+# Setup paths
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from user_auth import get_authenticator, is_admin_user
 
-st.set_page_config(page_title="📬 AI Email Dashboard", layout="wide")
+from user_auth import get_authenticator, is_admin_user
+from database.db import SessionLocal
+from database.models import User, Campaign, Lead, SenderConfig, EmailContent
+
+st.set_page_config(page_title="📬 AI Automated Email Marketing Tool", layout="wide")
+
 authenticator = get_authenticator()
 name, auth_status, username = authenticator.login("Login", "main")
 
 if not auth_status:
-    st.warning("🔐 Please enter your credentials")
+    if auth_status is False:
+        st.error("❌ Incorrect username or password.")
+    elif auth_status is None:
+        st.warning("🔐 Please enter your credentials")
     st.stop()
 
-st.sidebar.success(f"✅ Logged in as: {username}")
-authenticator.logout("🚪 Logout", "sidebar")
+
+
+# Sidebar navigation logic
+if not auth_status:
+    st.sidebar.title("Navigation")
+    st.sidebar.page_link("pages/CreateCampaign.py", label="Create Campaign")
+    st.sidebar.page_link("pages/Register.py", label="Register")
+    st.sidebar.page_link("pages/SenderSettings.py", label="Sender Settings")
+else:
+    st.sidebar.success(f"✅ Logged in as: {username}")
+    authenticator.logout("🚪 Logout", "sidebar")
+    # Only show AdminDashboard if admin
+    if is_admin_user(username):
+        st.sidebar.page_link("pages/AdminDashboard.py", label="Admin Dashboard")
+    st.sidebar.page_link("pages/CreateCampaign.py", label="Create Campaign")
+    st.sidebar.page_link("pages/SenderSettings.py", label="Sender Settings")
+
+import database.db as db_mod
+db = SessionLocal()
+user = db.query(User).filter_by(username=username).first()
+if not user:
+    st.error("❌ User not found in database.")
+    st.stop()
 
 admin = is_admin_user(username)
-user_base_path = Path(f"data/{username}")
-campaigns_dir = user_base_path / "campaigns"
-campaigns_dir.mkdir(parents=True, exist_ok=True)
 
 # -------------------- Admin Dashboard --------------------
 if admin:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🛠️ Admin Dashboard")
     st.title("🛠️ Admin Dashboard")
-    users_file = Path("users.csv")
-    if users_file.exists():
-        df_users = pd.read_csv(users_file)
+    users = db.execute(text("SELECT username, name, email, is_admin FROM users")).fetchall()
+    if users:
+        df_users = pd.DataFrame(users, columns=["username", "name", "email", "is_admin"])
         st.subheader("👤 Registered Users")
-        st.dataframe(df_users[["username", "name", "email", "is_admin"]], use_container_width=True)
+        st.dataframe(df_users, use_container_width=True)
 
-        st.subheader("📂 User Campaign Folders")
-        user_dirs = sorted([f.name for f in Path("data/").glob("*") if f.is_dir()])
-        for user_dir in user_dirs:
-            user_campaign_dir = Path(f"data/{user_dir}/campaigns")
-            campaigns = list(user_campaign_dir.glob("*/personalized_emails_sent.csv"))
-            total = sum(pd.read_csv(c).shape[0] for c in campaigns)
-            st.markdown(f"**🗂️ {user_dir}** — {total} emails sent across {len(campaigns)} campaigns")
+        st.subheader("📂 User Campaign Activity")
+        for user_row in df_users["username"]:
+            u = db.query(User).filter_by(username=user_row).first()
+            if u:
+                campaign_count = db.query(Campaign).filter_by(user_id=u.id).count()
+                total_emails = db.query(Lead).join(Campaign).filter(Campaign.user_id == u.id).count()
+                display_name = u.name if u.name else u.username
+                st.markdown(f"**📂 {display_name}** — {total_emails} emails sent across {campaign_count} campaigns")
+
+        # --- Admin: Delete User Functionality ---
+        st.subheader("🗑️ Delete a User")
+        user_to_delete = st.selectbox("Select a user to delete", df_users["username"].tolist(), key="delete_user_select")
+        if st.button("Delete Selected User", key="delete_user_btn"):
+            with st.spinner(f"Deleting user '{user_to_delete}' and all related data..."):
+                del_user = db.query(User).filter_by(username=user_to_delete).first()
+                if del_user:
+                    # Delete all campaigns, leads, sender config, and email content for this user
+                    campaigns = db.query(Campaign).filter_by(user_id=del_user.id).all()
+                    for campaign in campaigns:
+                        leads = db.query(Lead).filter_by(campaign_id=campaign.id).all()
+                        for lead in leads:
+                            db.query(EmailContent).filter_by(lead_id=lead.id).delete()
+                        db.query(Lead).filter_by(campaign_id=campaign.id).delete()
+                        db.query(EmailContent).filter_by(campaign_id=campaign.id).delete()
+                        db.query(Campaign).filter_by(id=campaign.id).delete()
+                    db.query(SenderConfig).filter_by(user_id=del_user.id).delete()
+                    db.delete(del_user)
+                    db.commit()
+                    st.success(f"✅ User '{user_to_delete}' and all related data deleted!")
+                    st.rerun()
+                else:
+                    st.error(f"❌ User '{user_to_delete}' not found.")
     else:
         st.warning("No users registered yet.")
-    st.stop()
+    # Removed st.stop() so admin can see campaign dashboard too
 
 # -------------------- Campaign Actions --------------------
+
 st.title(f"📬 AI Email Campaign Dashboard — Welcome {name}")
-sender_config_path = Path(f"data/{username}/sender_config.json")
+# Add Refresh Button
+if st.button("🔄 Refresh Dashboard"):
+    st.rerun()
 
+# Sender Settings
 st.subheader("📇 Your Sender Settings")
-
-if sender_config_path.exists():
-    with open(sender_config_path, "r", encoding="utf-8") as f:
-        sender_info = json.load(f)
-
+sender = db.query(SenderConfig).filter_by(user_id=user.id).first()
+if sender:
     st.markdown(f"""
-**Sender Name:** {sender_info.get("sender_name", "N/A")}  
-**Company:** {sender_info.get("company_name", "N/A")}  
-**Email:** {sender_info.get("sender_email", "N/A")}  
-**Website:** {sender_info.get("website", "N/A")}  
-**Phone:** {sender_info.get("phone", "N/A")}  
+**Sender Name:** {sender.sender_name}  
+**Company:** {sender.company_name}  
+**Email:** {sender.sender_email}  
+**Website:** {sender.website}  
+**Phone:** {sender.phone}  
 """)
     st.info("✏️ You can update these in the **Sender Settings** page.")
 else:
     st.warning("⚠️ Sender settings not found. Please go to the **Sender Settings** page to configure.")
 
-# -------------------- Campaign Selector --------------------
-campaigns = sorted([f.name for f in campaigns_dir.iterdir() if f.is_dir()])
+# Campaigns
+campaigns = db.query(Campaign).filter_by(user_id=user.id).all()
 if not campaigns:
     st.info("📂 No campaigns found. Run a campaign to get started.")
     st.stop()
 
-selected_campaign = st.sidebar.selectbox("📂 Select a Campaign", campaigns)
-campaign_path = campaigns_dir / selected_campaign
-sent_log_path = campaign_path / "personalized_emails_sent.csv"
+campaign_names = [c.name for c in campaigns]
+selected_campaign = st.sidebar.selectbox("📂 Select a Campaign", campaign_names)
 
+campaign_obj = db.query(Campaign).filter_by(user_id=user.id, name=selected_campaign).first()
 st.sidebar.markdown("### ⚙️ Campaign Actions")
 if selected_campaign:
+    
+    if st.sidebar.button("🔍 Scrape Leads"):
+        with st.spinner("Scraping leads for this campaign..."):
+            subprocess.run(["python", "backend/scraper.py", username, selected_campaign])
+        st.success("✅ Leads scraped and saved to database!")
+    if st.sidebar.button("✉️ Generate and Send Emails"):
+        with st.spinner("Generating and sending emails for this campaign..."):
+            subprocess.run(["python", "backend/generate_emails.py", username, selected_campaign])
+            subprocess.run(["python", "backend/send_emails.py", username, selected_campaign])
+        st.success("✅ Emails generated and sent!")
+    # Full campaign, re-analyze, and tracker server buttons remain unchanged
     if st.sidebar.button("1️⃣ Run Full Campaign"):
         with st.spinner("Running full campaign..."):
             subprocess.run(["python", "backend/run_campaign.py", username, selected_campaign])
@@ -99,28 +165,129 @@ if selected_campaign:
 else:
     st.sidebar.warning("⚠️ No campaign selected.")
 
-# Meta Info
-meta_path = campaign_path / "meta.json"
-if meta_path.exists():
-    meta = json.load(open(meta_path))
-    st.markdown(f"**🛠 Service**: {meta.get('service')} &nbsp;&nbsp; | &nbsp;&nbsp; **🗓 Date**: {meta.get('date')}")
 
-# Delete Button
-with st.expander("🗑️ Danger Zone: Delete This Campaign"):
-    if st.button("⚠️ Delete Campaign"):
-        shutil.rmtree(campaign_path)
-        st.warning(f"Campaign '{selected_campaign}' deleted.")
-        st.experimental_rerun()
+if campaign_obj:
+    st.markdown(f"**🛠 Service**: {campaign_obj.service} &nbsp;&nbsp; | &nbsp;&nbsp; **🗓 Date**: {campaign_obj.date_created.strftime('%Y-%m-%d')}")
+
+    # Delete Campaign Button
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🗑️ Delete This Campaign"):
+        with st.spinner("Deleting campaign and all related data..."):
+            leads = db.query(Lead).filter_by(campaign_id=campaign_obj.id).all()
+            for lead in leads:
+                db.query(EmailContent).filter_by(lead_id=lead.id).delete()
+            db.query(Lead).filter_by(campaign_id=campaign_obj.id).delete()
+            db.query(Campaign).filter_by(id=campaign_obj.id).delete()
+            db.commit()
+        st.success(f"✅ Campaign '{selected_campaign}' deleted!")
+        st.rerun()
+
+    # Show dashboard sections based on available data
+    leads_exist = db.query(Lead).filter_by(campaign_id=campaign_obj.id).count() > 0
+    emails_exist = db.query(EmailContent).filter_by(campaign_id=campaign_obj.id).count() > 0
+    sent_exist = db.query(Lead).filter_by(campaign_id=campaign_obj.id, delivery_status="Sent").count() > 0
+
+    dashboard_mode = st.sidebar.radio("Show Data For", ["Leads", "Generated Emails", "Sent Emails", "All"], index=3)
+
+    # Query results based on mode (always fetch fresh from DB)
+    data = []
+    if dashboard_mode == "Leads":
+        results = db.query(Lead).filter_by(campaign_id=campaign_obj.id).all()
+        for lead in results:
+            data.append({
+                "name": lead.name,
+                "email": lead.email,
+                "profile_link": lead.profile_link,
+                "state": lead.state,
+                "profile_description": lead.profile_description,
+                "delivery_status": lead.delivery_status,
+                "reply_text": lead.reply_text,
+                "reply_sentiment": lead.reply_sentiment,
+                "opened": "Yes" if lead.opened else "No",
+                "campaign_id": lead.campaign_id,
+                "platform_source": lead.platform_source,
+                "industry": lead.industry,
+                "email_subject": lead.email_subject,
+            })
+    elif dashboard_mode == "Generated Emails":
+        results = db.query(Lead, EmailContent).outerjoin(EmailContent, EmailContent.lead_id == Lead.id).filter(Lead.campaign_id == campaign_obj.id).all()
+        for lead, email in results:
+            data.append({
+                "name": lead.name,
+                "email": lead.email,
+                "profile_link": lead.profile_link,
+                "state": lead.state,
+                "profile_description": lead.profile_description,
+                "generated_email": email.body if email else None,
+                "delivery_status": lead.delivery_status,
+                "reply_text": lead.reply_text,
+                "reply_sentiment": lead.reply_sentiment,
+                "opened": "Yes" if lead.opened else "No",
+                "campaign_id": lead.campaign_id,
+                "platform_source": lead.platform_source,
+                "industry": lead.industry,
+                "email_subject": lead.email_subject or (email.subject if email else None),
+            })
+    elif dashboard_mode == "Sent Emails":
+        results = db.query(Lead, EmailContent).join(EmailContent, EmailContent.lead_id == Lead.id).filter(Lead.campaign_id == campaign_obj.id, Lead.delivery_status == "Sent").all()
+        for lead, email in results:
+            if email:
+                data.append({
+                    "name": lead.name,
+                    "email": lead.email,
+                    "profile_link": lead.profile_link,
+                    "state": lead.state,
+                    "profile_description": lead.profile_description,
+                    "generated_email": email.body,
+                    "delivery_status": lead.delivery_status,
+                    "reply_text": lead.reply_text,
+                    "reply_sentiment": lead.reply_sentiment,
+                    "opened": "Yes" if lead.opened else "No",
+                    "campaign_id": lead.campaign_id,
+                    "platform_source": lead.platform_source,
+                    "industry": lead.industry,
+                    "email_subject": lead.email_subject or email.subject,
+                })
+    else:
+        results = db.query(Lead, EmailContent).outerjoin(EmailContent, EmailContent.lead_id == Lead.id).filter(Lead.campaign_id == campaign_obj.id).all()
+        for lead, email in results:
+            data.append({
+                "name": lead.name,
+                "email": lead.email,
+                "profile_link": lead.profile_link,
+                "state": lead.state,
+                "profile_description": lead.profile_description,
+                "generated_email": email.body if email else None,
+                "delivery_status": lead.delivery_status,
+                "reply_text": lead.reply_text,
+                "reply_sentiment": lead.reply_sentiment,
+                "opened": "Yes" if lead.opened else "No",
+                "campaign_id": lead.campaign_id,
+                "platform_source": lead.platform_source,
+                "industry": lead.industry,
+                "email_subject": lead.email_subject or (email.subject if email else None),
+            })
+    # st.write("[DEBUG] Raw leads data from DB:", data)
+    df = pd.DataFrame(data)
+    # if df.empty:
+        # st.info("No data available for this mode yet.")
+
 
 # -------------------- Campaign Results --------------------
-if sent_log_path.exists():
-    df = pd.read_csv(sent_log_path)
-    st.subheader("📊 Campaign Summary")
+if campaign_obj:
 
+    # Always show available data for each mode, even if some steps are incomplete
+    if df.empty:
+        st.info("No data available for this mode yet.")
+        # Don't stop, allow dashboard to show summary and export buttons (empty)
+
+    df = df.drop_duplicates(subset=["email"])  # Remove duplicate leads by email
+
+    st.subheader("📊 Campaign Summary")
     total_leads = len(df)
-    total_sent = df["Delivery Status"].eq("Sent").sum() if "Delivery Status" in df.columns else total_leads
-    total_opened = df["Opened"].eq("Yes").sum() if "Opened" in df.columns else 0
-    replies = df["Reply Text"].notna().sum() if "Reply Text" in df.columns else 0
+    total_sent = df["delivery_status"].eq("Sent").sum() if (not df.empty and "delivery_status" in df.columns) else 0
+    total_opened = df["opened"].eq("Yes").sum() if (not df.empty and "opened" in df.columns) else 0
+    replies = df["reply_text"].notna().sum() if (not df.empty and "reply_text" in df.columns) else 0
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Leads", total_leads)
@@ -132,91 +299,86 @@ if sent_log_path.exists():
     st.subheader("📊 Campaign Results")
     col1, col2 = st.columns(2)
     with col1:
-        sentiment_filter = st.selectbox("Filter by Reply Sentiment", ["All", "Positive", "Neutral", "Negative"])
+        sentiment_filter = st.selectbox("Filter by Reply Sentiment", ["All", "Positive", "Neutral", "Negative"], key="sentiment_filter_main")
     with col2:
-        opened_filter = st.selectbox("Filter by Opened Status", ["All", "Yes", "No"])
+        opened_filter = st.selectbox("Filter by Opened Status", ["All", "Yes", "No"], key="opened_filter_main")
 
     filtered_df = df.copy()
-    if sentiment_filter != "All" and "Reply Sentiment" in df.columns:
-        filtered_df = filtered_df[filtered_df["Reply Sentiment"] == sentiment_filter]
-    if opened_filter != "All" and "Opened" in df.columns:
-        filtered_df = filtered_df[filtered_df["Opened"] == opened_filter]
+    if sentiment_filter != "All":
+        filtered_df = filtered_df[filtered_df["reply_sentiment"] == sentiment_filter]
+    if opened_filter != "All":
+        filtered_df = filtered_df[filtered_df["opened"] == opened_filter]
 
     st.dataframe(filtered_df, use_container_width=True)
 
     # Export Buttons
-    st.download_button("📥 Download CSV", data=filtered_df.to_csv(index=False), file_name=f"{selected_campaign}.csv", mime="text/csv")
+    st.download_button("📅 Download CSV", data=filtered_df.to_csv(index=False), file_name=f"{selected_campaign}.csv", mime="text/csv", key=f"download_csv_{dashboard_mode}")
 
-    towrite = BytesIO()
-    with pd.ExcelWriter(towrite, engine="xlsxwriter") as writer:
-        filtered_df.to_excel(writer, index=False, sheet_name="Report")
-    towrite.seek(0)
-    st.download_button("📊 Export as Excel", data=towrite.read(), file_name=f"{selected_campaign}.xlsx")
+    with BytesIO() as towrite:
+        with pd.ExcelWriter(towrite, engine="xlsxwriter") as writer:
+            filtered_df.to_excel(writer, index=False, sheet_name="Report")
+        towrite.seek(0)
+        st.download_button("📊 Export as Excel", data=towrite.read(), file_name=f"{selected_campaign}.xlsx", key=f"download_excel_{dashboard_mode}")
 
-    # Optional PDF button
-if st.button("📄 Export to PDF (Stable)"):
-    try:
-        from reportlab.lib.pagesizes import letter, landscape
-        from reportlab.lib import colors
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-        from reportlab.lib.styles import getSampleStyleSheet
+    # PDF Export
+    if st.button("📄 Export to PDF (Stable)", key=f"export_pdf_{dashboard_mode}"):
+        try:
+            buffer = BytesIO()
+            selected_columns = ["name", "email", "platform_source", "state", "industry", "email_subject", "reply_sentiment", "opened"]
+            data = filtered_df[selected_columns].fillna("").values.tolist()
+            data.insert(0, selected_columns)
 
-        from io import BytesIO
-        buffer = BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+            style = getSampleStyleSheet()
 
-        selected_columns = [
-            "Name", "Email", "Platform Source", "State", "Industry",
-            "Email Subject", "Reply Sentiment", "Opened"
-        ]
-        data = filtered_df[selected_columns].fillna("").values.tolist()
-        headers = selected_columns
-        data.insert(0, headers)
+            table = Table(data, repeatRows=1)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#eeeeee")),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor("#333333")),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+            ]))
 
-        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
-        style = getSampleStyleSheet()
+            story = [Paragraph(f"Campaign Report: {selected_campaign}", style["Title"]), table]
+            doc.build(story)
 
-        table = Table(data, repeatRows=1)
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#eeeeee")),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor("#333333")),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
-        ]))
-
-        story = [Paragraph(f"Campaign Report: {selected_campaign}", style["Title"]), table]
-        doc.build(story)
-
-        buffer.seek(0)
-        st.download_button(
-            label="📄 Download Campaign Report PDF",
-            data=buffer,
-            file_name=f"{selected_campaign}_summary.pdf",
-            mime="application/pdf"
-        )
-    except Exception as e:
-        st.error(f"PDF generation failed: {e}")
-
+            buffer.seek(0)
+            st.download_button(
+                label="📄 Download Campaign Report PDF",
+                data=buffer,
+                file_name=f"{selected_campaign}_summary.pdf",
+                mime="application/pdf"
+            )
+        except Exception as e:
+            st.error(f"PDF generation failed: {e}")
 
     # Charts
-    if "Reply Sentiment" in df.columns:
+    if "reply_sentiment" in df.columns and not df["reply_sentiment"].isnull().all():
         st.subheader("📈 Sentiment Distribution")
-        st.bar_chart(df["Reply Sentiment"].value_counts())
+        st.bar_chart(df["reply_sentiment"].value_counts())
 
-    if "Opened" in df.columns:
+    if "opened" in df.columns and not df["opened"].isnull().all():
         st.subheader("📈 Open Rate")
-        st.bar_chart(df["Opened"].value_counts())
+        st.bar_chart(df["opened"].value_counts())
 
-    if "Reply Text" in df.columns:
+    if "reply_text" in df.columns:
         st.subheader("📬 Live Reply Viewer")
-        replies = df[df["Reply Text"].notna()][["Email", "Reply Sentiment"]]
+        replies = df[df["reply_text"].notna()][["email", "reply_sentiment"]]
         if not replies.empty:
-            selected_email = st.selectbox("Select a reply to view", replies["Email"].tolist())
-            reply_text = df[df["Email"] == selected_email]["Reply Text"].values[0]
+            selected_email = st.selectbox("Select a reply to view", replies["email"].tolist())
+            reply_text = df[df["email"] == selected_email]["reply_text"].values[0]
             st.code(reply_text, language="text")
         else:
             st.info("No replies yet.")
-else:
-    st.info("No campaign data found.")
+
+
+# -------------------- Campaign Results (for All mode) --------------------
+
+
+## Removed duplicate results table and export buttons
+
+# Close DB session
+db.close()

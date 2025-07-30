@@ -1,29 +1,39 @@
-import streamlit as st
 import pandas as pd
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
+import streamlit as st
 
 # Allow import from root
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 from user_auth import get_authenticator, is_admin_user
 
+# Import DB session and models
+from database.db import SessionLocal
+from database.models import User, Campaign, EmailContent, Lead
+
+# Page config
 st.set_page_config(page_title="🛠️ Admin Dashboard", layout="wide")
 
 # --- Authenticate first ---
 authenticator = get_authenticator()
-name, auth_status, username = authenticator.login("Admin Login", "main")
 
-if not auth_status:
-    if auth_status is False:
-        st.error("❌ Incorrect username or password.")
-    elif auth_status is None:
-        st.warning("🔐 Please log in to access this page.")
+# Always show login form if not authenticated
+name, auth_status, username = authenticator.login("Login", "main")
+
+if auth_status is None:
+    st.warning("🔐 Please log in to access this page.")
+    st.stop()
+elif auth_status is False:
+    st.error("❌ Incorrect username or password.")
     st.stop()
 
 # --- Check admin role ---
 if not is_admin_user(username):
-    st.error("🚫 You do not have access to this page.")
+    st.error("🚫 You do not have access to this page. Please log in as an administrator.")
+    if st.button("🔑 Login as Admin"):
+        st.switch_page("Home.py")
     st.stop()
 
 st.sidebar.success(f"✅ Logged in as admin: {username}")
@@ -32,20 +42,72 @@ authenticator.logout("🚪 Logout", "sidebar")
 # --- Admin dashboard content ---
 st.title("🛠️ Admin Dashboard")
 
-users_file = Path("users.csv")
-if users_file.exists():
-    df_users = pd.read_csv(users_file)
-    st.subheader("👤 Registered Users")
-    st.dataframe(df_users[["username", "name", "email", "is_admin"]], use_container_width=True)
+db = SessionLocal()
 
-    st.subheader("📂 User Campaign Folders")
-    user_dirs = sorted([f.name for f in Path("data/").glob("*") if f.is_dir()])
-    for user_dir in user_dirs:
-        campaign_file = Path(f"data/{user_dir}/personalized_emails_sent.csv")
-        if campaign_file.exists():
-            df = pd.read_csv(campaign_file)
-            st.markdown(f"**🗂️ {user_dir}** — {len(df)} emails sent")
+# --- Admin Actions ---
+st.markdown("---")
+st.subheader("⚡ Admin Actions")
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("🚀 Run Full Campaign", use_container_width=True):
+        import subprocess
+        result = subprocess.run([sys.executable, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../backend/run_campaign.py'))], capture_output=True, text=True)
+        if result.returncode == 0:
+            st.success("Full campaign run completed successfully.")
         else:
-            st.markdown(f"**🗂️ {user_dir}** — ⚠️ No campaign yet")
+            st.error(f"Error running campaign: {result.stderr}")
+with col2:
+    if st.button("📬 Run Reply Analysis", use_container_width=True):
+        import subprocess
+        result = subprocess.run([sys.executable, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../backend/analyze_replies.py'))], capture_output=True, text=True)
+        if result.returncode == 0:
+            st.success("Reply analysis completed successfully.")
+        else:
+            st.error(f"Error running reply analysis: {result.stderr}")
+st.markdown("---")
+
+# --- Show registered users ---
+st.subheader("👤 Registered Users")
+
+users = db.query(User).all()
+if users:
+    user_data = [{
+        "Name": u.name,
+        "Username": u.username,
+        "Email": u.email,
+        "Is Admin": "Yes" if u.is_admin else "No"
+    } for u in users]
+
+    df_users = pd.DataFrame(user_data)
+    st.dataframe(df_users, use_container_width=True)
 else:
-    st.warning("⚠️ No users registered yet.")
+    st.info("No users registered yet.")
+
+# --- Show campaign + email summary from DB ---
+st.subheader("📂 User Campaign Summary")
+
+campaigns = db.query(Campaign).all()
+if not campaigns:
+    st.info("No campaigns found.")
+else:
+    summary = {}
+    for c in campaigns:
+        key = c.user
+        summary.setdefault(key, {"campaigns": 0, "emails": 0})
+        summary[key]["campaigns"] += 1
+        email_count = (
+            db.query(EmailContent)
+            .join(Lead, EmailContent.lead_id == Lead.id)
+            .join(Campaign, Lead.campaign_id == Campaign.id)
+            .filter(Campaign.user_id == c.user_id, Campaign.name == c.name)
+            .count()
+        )
+        summary[key]["emails"] += email_count
+
+    for user, stats in summary.items():
+        display_name = user.name if hasattr(user, 'name') and user.name else (user.username if hasattr(user, 'username') else str(user))
+        st.markdown(
+            f"**🗂️ {display_name}** — {stats['emails']} emails sent across {stats['campaigns']} campaign(s)"
+        )
+
+db.close()

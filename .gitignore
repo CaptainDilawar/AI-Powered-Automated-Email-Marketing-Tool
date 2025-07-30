@@ -1,2 +1,7 @@
 .env
 users.csv
+makeadmin.py
+create_admin_user.py
+drip_crawler_scraper.py
+__pycache__/
+scraper_errors.log

@@ -8,6 +8,9 @@ import csv
 import sys
 from pathlib import Path
 import time
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from database.db import SessionLocal
+from database.models import Campaign, Lead, EmailContent, User
 
 # --------- Get username ---------
 if len(sys.argv) < 3:
@@ -16,21 +19,35 @@ if len(sys.argv) < 3:
 
 user = sys.argv[1]
 campaign = sys.argv[2]
-data_path = Path(f"data/{user}/campaigns/{campaign}").resolve()
-data_path.mkdir(parents=True, exist_ok=True)
+# Folder creation removed; all data is stored in the database
 # --------- Load API Key ---------
 env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # --------- Load Sender Info (User-specific) ---------
-sender_config_path = Path(f"data/{user}/sender_config.json")
-if not sender_config_path.exists():
+from database.models import SenderConfig, User
+
+# --- Fetch sender config from DB ---
+session = SessionLocal()
+db_user = session.query(User).filter_by(username=user).first()
+if not db_user:
+    print(f"❌ User '{user}' not found.")
+    sys.exit(1)
+
+sender_config = session.query(SenderConfig).filter_by(user_id=db_user.id).first()
+if not sender_config:
     print(f"❌ Sender config not found for user '{user}'. Please set it from the Sender Settings UI.")
     sys.exit(1)
 
-with open(sender_config_path, "r", encoding="utf-8") as f:
-    SENDER_INFO = json.load(f)
+SENDER_INFO = {
+    "company_name": sender_config.company_name,
+    "sender_name": sender_config.sender_name,
+    "sender_email": sender_config.sender_email,
+    "website": sender_config.website,
+    "phone": sender_config.phone
+}
+
 
 # --------- Industry Role Mapping ---------
 INDUSTRY_ROLES = {
@@ -155,33 +172,56 @@ def convert_to_html(text, lead_id):
     return html + tracking_pixel
 
 def main():
-    input_file = data_path / "leads.csv"
-    output_file = data_path / "generated_emails.csv"
+    session = SessionLocal()
 
-    df = pd.read_csv(input_file)
-    df['Lead ID'] = df.index + 1
-    df['Email Subject'] = ""
-    df['Generated Email'] = ""
-    df['Email HTML'] = ""
+    # --- Fetch user object first ---
+    user_obj = session.query(User).filter_by(username=user).first()
+    if not user_obj:
+        print(f"❌ User '{user}' not found.")
+        return
 
-    print(f"\n📬 Generating personalized emails using Groq API for {len(df)} leads...\n")
+    # --- Fetch campaign using user_id ---
+    campaign_obj = session.query(Campaign).filter_by(user_id=user_obj.id, name=campaign).first()
+    if not campaign_obj:
+        print(f"❌ Campaign '{campaign}' not found for user '{user}'")
+        return
 
-    for i in tqdm(df.index):
-        prompt = create_prompt(df.loc[i])
+    leads = session.query(Lead).filter_by(campaign_id=campaign_obj.id).all()
+    if not leads:
+        print("⚠️ No leads found in database.")
+        return
+
+    print(f"\n📬 Generating emails using Groq API for {len(leads)} leads...\n")
+
+    for lead in tqdm(leads):
+        prompt = create_prompt({
+            "Industry": lead.industry,
+            "State": lead.state,
+            "Platform Source": lead.platform_source,
+            "Profile Description": lead.profile_description
+        })
         subject, email = generate_from_groq(prompt)
-        email_html = convert_to_html(email, lead_id=df.loc[i, 'Lead ID'])
+        email_html = convert_to_html(email, lead_id=lead.id)
 
-        print(f"\nLead {i+1}")
+        print(f"\nLead ID: {lead.id}")
         print(f"Subject: {subject}")
         print(f"Email: {email[:100]}...")
         print(f"HTML: {email_html[:100]}...")
 
-        df.at[i, 'Email Subject'] = subject
-        df.at[i, 'Generated Email'] = email
-        df.at[i, 'Email HTML'] = email_html
+        # Save to DB
+        email_content = EmailContent(
+            lead_id=lead.id,
+            campaign_id=campaign_obj.id,
+            subject=subject,
+            body=email,
+            html=email_html
+        )
+        session.add(email_content)
 
-    df.to_csv(output_file, index=False, quoting=csv.QUOTE_ALL, lineterminator='\n', encoding='utf-8')
-    print(f"\n✅ Emails and HTML saved to: '{output_file}'")
+    session.commit()
+    session.close()
+    print("\n✅ Emails saved to database.")
+
 
 if __name__ == "__main__":
     main()

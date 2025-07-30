@@ -1,58 +1,64 @@
-import pandas as pd
 import streamlit_authenticator as stauth
-from pathlib import Path
+from database.db import SessionLocal
+from database.models import User
+import bcrypt
 
-USER_DB = Path("users.csv")
 
-def load_users():
-    if not USER_DB.exists():
-        return [], [], [], []
-    df = pd.read_csv(USER_DB)
-    usernames = df['username'].tolist()
-    names = df['name'].tolist()
-    passwords = df['password'].tolist()
-    is_admin = df['is_admin'].tolist()
-    return usernames, names, passwords, is_admin
+def get_all_users():
+    session = SessionLocal()
+    users = session.query(User).all()
+    session.close()
+    return users
 
-def add_user(name, username, password, email, is_admin=False):
-    new_user = {
-        "name": name,
-        "username": username,
-        "password": stauth.Hasher([password]).generate()[0],
-        "email": email,
-        "is_admin": int(is_admin)
-    }
-
-    df = pd.DataFrame([new_user])
-    file_exists = USER_DB.exists()
-
-    # Append properly with correct line termination
-    df.to_csv(USER_DB, mode='a', index=False, header=not file_exists, encoding='utf-8', lineterminator='\n')
-
-def user_exists(username):
-    if not USER_DB.exists():
-        return False
-    return username in pd.read_csv(USER_DB)['username'].values
-
-def is_admin_user(username):
-    if not USER_DB.exists():
-        return False
-    df = pd.read_csv(USER_DB)
-    match = df[df['username'] == username]
-    if not match.empty:
-        value = str(match['is_admin'].values[0]).strip()
-        return value in ("1", "True", "true")
-    return False
 
 def get_authenticator():
-    usernames, names, passwords, _ = load_users()
-    if not usernames or not names or not passwords:
-        raise ValueError("User database is empty or malformed. Please register a user.")
+    users = get_all_users()
+
+    if not users:
+        raise ValueError("User database is empty. Please register a user.")
+
+    names = [user.name for user in users]
+    usernames = [user.username for user in users]
+    passwords = [user.password_hash for user in users]  # Pre-hashed passwords
+
     return stauth.Authenticate(
         names,
         usernames,
         passwords,
-        "email_app",
-        "abcdef",
+        "email_app",  # cookie name
+        "abcdef",     # secret key
         cookie_expiry_days=3
     )
+
+
+def user_exists(username):
+    session = SessionLocal()
+    user = session.query(User).filter(User.username == username).first()
+    session.close()
+    return bool(user)
+
+
+def is_admin_user(username):
+    session = SessionLocal()
+    user = session.query(User).filter(User.username == username).first()
+    session.close()
+    return bool(user and user.is_admin)
+
+
+def add_user(name, username, password, email, is_admin=False):
+    if user_exists(username):
+        return False
+
+    hashed_pw = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    new_user = User(
+        name=name,
+        username=username,
+        password_hash=hashed_pw,
+        email=email,
+        is_admin=is_admin
+    )
+    session = SessionLocal()
+    session.add(new_user)
+    session.commit()
+    session.close()
+    return True

@@ -1,65 +1,46 @@
-import pandas as pd
-import re
-import time
-import os
-import random
+print("=== Scraper started ===", flush=True)
 import sys
+import os
+import json
+import time
+import random
+import re
+import requests
 from pathlib import Path
-from datetime import datetime
-from itertools import product
+from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-import requests
-from bs4 import BeautifulSoup
-import json
+from selenium.common.exceptions import TimeoutException
+from itertools import product
 import logging
 
+# Setup paths
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from database.db import SessionLocal
+from database.models import User, Campaign, SenderConfig, Lead
+from database.leads_crud import save_leads_to_db
+
+# Setup browser
 options = Options()
 options.add_argument("--ignore-certificate-errors")
 options.add_experimental_option("excludeSwitches", ["enable-logging"])
 service = Service(log_path=os.devnull)
 logging.getLogger('selenium').setLevel(logging.CRITICAL)
+
 driver = webdriver.Chrome(service=service, options=options)
+
 # --------- Get CLI Arguments ---------
 if len(sys.argv) < 3:
     print("Usage: python scraper.py <username> <campaign_name>")
     sys.exit(1)
 
-user = sys.argv[1]
-campaign = sys.argv[2]
-
-user_path = Path(f"data/{user}").resolve()
-campaign_path = user_path / "campaigns" / campaign
-campaign_path.mkdir(parents=True, exist_ok=True)
-
-# --------- Load Campaign Meta Info ---------
-meta_path = campaign_path / "campaign_config.json"
-if not meta_path.exists():
-    print(f"❌ Campaign meta.json not found: {meta_path}")
-    sys.exit(1)
-
-with open(meta_path, "r", encoding="utf-8") as f:
-    meta = json.load(f)
-
-service = meta.get("service")
-platforms = meta.get("platforms", [])
-industries = meta.get("industries", [])
-locations = meta.get("locations", [])
-
-# --------- Load Sender Config from user root ---------
-sender_config_path = user_path / "sender_config.json"
-if not sender_config_path.exists():
-    print(f"❌ sender_config.json not found at {sender_config_path}")
-    sys.exit(1)
-
-with open(sender_config_path, "r", encoding="utf-8") as f:
-    sender_info = json.load(f)
+username = sys.argv[1]
+campaign_name = sys.argv[2]
 
 # --------- Constants ---------
 USER_AGENTS = [
@@ -73,17 +54,16 @@ DORK_PATTERNS = [
     'site:{site_domain} "{industry}" "{location}" "@gmail.com"',
     'site:{site_domain} "{industry}" "{location}" intext:email',
     'site:{site_domain} "{industry}" "{location}" contact',
-    'site:{site_domain} "{industry}" "{location}" "contact us"',
-    'site:{site_domain} "{industry}" "{location}" inurl:contact',
-    'site:{site_domain} "{industry}" "{location}" intitle:contact',
-    'site:{site_domain} "{industry}" "{location}" "@yahoo.com"',
-    'site:{site_domain} "{industry}" "{location}" "@outlook.com"'
+    # 'site:{site_domain} "{industry}" "{location}" "contact us"',
+    # 'site:{site_domain} "{industry}" "{location}" inurl:contact',
+    # 'site:{site_domain} "{industry}" "{location}" intitle:contact',
+    # 'site:{site_domain} "{industry}" "{location}" "@yahoo.com"',
+    # 'site:{site_domain} "{industry}" "{location}" "@outlook.com"'
 ]
 
 # --------- Utility Functions ---------
 def has_website(text):
-    pattern = r"https?://[\w.-]+|www\.[\w.-]+"
-    return bool(re.search(pattern, text))
+    return bool(re.search(r"https?://[\w.-]+|www\.[\w.-]+", text))
 
 def is_captcha_present(driver):
     try:
@@ -103,7 +83,7 @@ def scrape_google(driver, combinations):
         site_domain = platform if '.' in platform else f"{platform}.com"
         for dork in DORK_PATTERNS:
             query = dork.format(site_domain=site_domain, industry=industry, location=location)
-            print(f"🔍 Searching: {query}")
+            print(f"[SEARCH] {query}")
             try:
                 user_agent = random.choice(USER_AGENTS)
                 driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": user_agent})
@@ -116,16 +96,16 @@ def scrape_google(driver, combinations):
                 time.sleep(2)
 
                 if is_captcha_present(driver):
-                    print("⚠️ CAPTCHA detected. Waiting for it to be solved...")
-
+                    print("[CAPTCHA] CAPTCHA detected. Waiting for it to be solved...")
                     for _ in range(90):
                         time.sleep(1)
                         if not is_captcha_present(driver):
-                            print("✅ CAPTCHA solved or bypassed.")
+                            print("[CAPTCHA] CAPTCHA solved or bypassed.")
                             break
-                        else:
-                            print("⏳ Captcha still present after 90 seconds, skipping this query.")
-                            continue
+                    else:
+                        print("[CAPTCHA] Skipping query due to CAPTCHA.")
+                        continue
+
                 results = WebDriverWait(driver, 10).until(
                     EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.tF2Cxc"))
                 )
@@ -136,7 +116,13 @@ def scrape_google(driver, combinations):
                         link = result.find_element(By.CSS_SELECTOR, "a").get_attribute("href")
                         description = result.find_element(By.CSS_SELECTOR, "div.VwiC3b").text
 
+                        print(f"Result title: {title}")
+                        print(f"Result description: {description}")
+                        print(f"Result link: {link}")
+
                         profile_description = ""
+                        emails = set(re.findall(email_pattern, description))
+                        print(f"Emails found in description: {emails}")
                         try:
                             resp = requests.get(link, headers={"User-Agent": user_agent}, timeout=5)
                             if resp.status_code == 200:
@@ -144,54 +130,79 @@ def scrape_google(driver, combinations):
                                 meta = soup.find('meta', attrs={'name': 'description'})
                                 if meta:
                                     profile_description = meta.get("content", "")
-                        except Exception:
+                                page_emails = set(re.findall(email_pattern, resp.text))
+                                print(f"Emails found in linked page: {page_emails}")
+                                emails.update(page_emails)
+                        except Exception as e:
+                            print(f"Error fetching/parsing linked page: {e}")
                             pass
 
-                        emails = re.findall(email_pattern, description)
-                        if emails and not has_website(description):
-                            leads.append({
-                                "Name": title,
-                                "Email": ", ".join(list(set(emails))),
-                                "Platform Source": platform.capitalize(),
-                                "Profile Link": link,
-                                "Website": "No",
-                                "State": location,
-                                "Industry": industry,
-                                "Profile Description": profile_description
-                            })
-                    except Exception:
+                        if emails:
+                            print(f"Adding lead(s) with emails: {emails}")
+                            for email in emails:
+                                leads.append({
+                                    "name": title,
+                                    "email": email.strip(),
+                                    "platform_source": platform.capitalize(),
+                                    "profile_link": link,
+                                    "website": "Yes" if has_website(description) else "No",
+                                    "state": location,
+                                    "industry": industry,
+                                    "profile_description": profile_description
+                                })
+                        else:
+                            print("No emails found for this result.")
+                    except Exception as e:
+                        print(f"Error parsing result: {e}")
                         continue
 
                 time.sleep(1)
-
             except Exception as e:
-                print(f"❌ Error: {e}")
+                print(f"[ERROR] {e}")
                 continue
 
+    print(f"Total leads found: {len(leads)}")
     return leads
 
 # --------- Main ---------
 if __name__ == "__main__":
+    session = SessionLocal()
     try:
-        driver_opts = webdriver.ChromeOptions()
-        driver_opts.add_argument("--ignore-certificate-errors")
-        driver_opts.add_argument("--disable-extensions")
-        driver_opts.add_argument("--start-maximized")
-        driver = webdriver.Chrome(options=driver_opts)
+        # Print absolute DB path for debug
+        import database.db as db_mod
+        print(f"[DEBUG] Using DB file: {db_mod.DB_PATH}")
+
+        user_obj = session.query(User).filter_by(username=username).first()
+        if not user_obj:
+            raise Exception(f"[ERROR] User '{username}' not found in DB.")
+        print(f"[DEBUG] user_id: {user_obj.id}")
+
+        campaign_obj = session.query(Campaign).filter_by(user_id=user_obj.id, name=campaign_name).first()
+        if not campaign_obj:
+            raise Exception(f"[ERROR] Campaign '{campaign_name}' not found for user '{username}'.")
+        print(f"[DEBUG] campaign_id: {campaign_obj.id}")
+
+        # Fetch search configuration (customize this part if you store them differently)
+        platforms = campaign_obj.platforms.split(",") if hasattr(campaign_obj, "platforms") else ["linkedin"]
+        industries = campaign_obj.industries.split(",") if hasattr(campaign_obj, "industries") else ["tech"]
+        locations = campaign_obj.locations.split(",") if hasattr(campaign_obj, "locations") else ["usa"]
 
         combinations = list(product(platforms, industries, locations))
         leads = scrape_google(driver, combinations)
 
+
         if leads:
-            df = pd.DataFrame(leads)
-            df.drop_duplicates(subset=["Email", "Name"], inplace=True)
-            df.to_csv(campaign_path / "leads.csv", index=False)
-            print(f"✅ Saved {len(df)} leads to {campaign_path / 'leads.csv'}")
+            from database.leads_crud import save_leads_to_db
+            save_leads_to_db(user_obj.id, campaign_name, leads)
+            print(f"[SUCCESS] Saved {len(leads)} leads to the database under campaign '{campaign_name}'.")
+            # Debug: count leads in DB for this campaign
+            lead_count = session.query(db_mod.Lead).filter_by(campaign_id=campaign_obj.id).count()
+            print(f"[DEBUG] Lead count in DB for campaign_id={campaign_obj.id}: {lead_count}")
         else:
-            print("⚠️ No leads found.")
+            print("[INFO] No leads found.")
 
     except Exception as e:
-        print(f"❌ Fatal error: {e}")
+        print(f"[ERROR] Fatal error: {e}")
     finally:
-        if 'driver' in locals():
-            driver.quit()
+        driver.quit()
+        session.close()

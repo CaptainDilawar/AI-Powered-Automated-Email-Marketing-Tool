@@ -1,18 +1,25 @@
-import pandas as pd
-from imapclient import IMAPClient
-import pyzmail
 import os
 import requests
-from dotenv import load_dotenv
 from pathlib import Path
+from dotenv import load_dotenv
+from imapclient import IMAPClient
+import pyzmail
+import sys
 
-# Load environment variables once
+# Add root path for imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from database.db import SessionLocal
+from database.models import Campaign, EmailContent, Lead, User
+
+# --------- Load Environment Variables ---------
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 EMAIL = os.getenv("EMAIL")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.gmail.com")
 
+
+# --------- Sentiment Classifier ---------
 def classify_reply_text(reply_text):
     prompt = f"""You are a sales assistant. Classify the following email reply into one of the following categories:
 - Positive (interested or wants to connect)
@@ -47,76 +54,88 @@ Just return: Positive, Neutral, or Negative.
         print(f"❌ Error classifying reply: {e}")
         return "Unknown"
 
-def analyze_replies(user, campaign):
-    base_path = Path(__file__).resolve().parent.parent
-    campaign_path = base_path / "data" / user / "campaigns" / campaign
-    campaign_path.mkdir(parents=True, exist_ok=True)
 
-    sent_log = campaign_path / "personalized_emails_sent.csv"
-    reply_log = campaign_path / "reply_analysis.csv"
+# --------- Analyze Replies ---------
+def analyze_replies(username, campaign_name):
+    session = SessionLocal()
 
-    if not sent_log.exists():
-        print(f"❌ Sent email log not found: {sent_log}")
+    # Fetch user object
+    user_obj = session.query(User).filter_by(username=username).first()
+    if not user_obj:
+        print(f"❌ User '{username}' not found.")
         return
 
-    df = pd.read_csv(sent_log)
-    df['Reply Text'] = ''
-    df['Reply Sentiment'] = ''
-
-    known_recipients = df['Email'].dropna().unique().tolist()
-    if not known_recipients:
-        print("⚠️ No recipient emails found in sent log.")
+    # Fetch campaign
+    campaign_obj = session.query(Campaign).filter_by(user_id=user_obj.id, name=campaign_name).first()
+    if not campaign_obj:
+        print(f"❌ Campaign '{campaign_name}' not found for user '{username}'")
         return
 
+    # Fetch related email content
+    email_records = session.query(EmailContent).filter_by(campaign_id=campaign_obj.id).all()
+    if not email_records:
+        print(f"⚠️ No emails found for campaign '{campaign_name}'")
+        return
+
+    # Map recipient emails to their records
+    lead_map = {}
+    for email in email_records:
+        lead = session.query(Lead).filter_by(id=email.lead_id).first()
+        if lead and lead.email:
+            lead_map[lead.email.lower()] = (email, lead)
+
+    if not lead_map:
+        print("⚠️ No leads with valid email addresses found.")
+        return
+
+
+    # Connect to IMAP
     with IMAPClient(IMAP_SERVER) as client:
         client.login(EMAIL, EMAIL_PASSWORD)
         client.select_folder('INBOX', readonly=False)
 
-        search_query = ['OR'] * (len(known_recipients) - 1)
-        for email in known_recipients:
-            search_query.append('FROM')
-            search_query.append(email)
+        all_uids = set()
+        for addr in lead_map.keys():
+            try:
+                uids = client.search(['FROM', addr])
+                all_uids.update(uids)
+            except Exception as e:
+                print(f"IMAP search failed for sender {addr}: {e}", flush=True)
 
-        try:
-            messages = client.search(search_query)
-        except Exception as e:
-            print(f"❌ IMAP search failed: {e}")
-            return
-
-        for uid in messages:
+        for uid in all_uids:
             raw = client.fetch([uid], ['BODY[]', 'ENVELOPE'])
             msg = pyzmail.PyzMessage.factory(raw[uid][b'BODY[]'])
             envelope = raw[uid][b'ENVELOPE']
             sender_email = envelope.from_[0].mailbox.decode() + '@' + envelope.from_[0].host.decode()
 
+            email_entry = lead_map.get(sender_email.lower())
+            if not email_entry:
+                print(f"⚠️ Reply from unknown sender: {sender_email}")
+                continue
+
+            email_record, _ = email_entry
+
             if msg.text_part:
                 try:
                     reply_text = msg.text_part.get_payload().decode(msg.text_part.charset)
                     sentiment = classify_reply_text(reply_text)
-
-                    match = df[df['Email'] == sender_email]
-                    if not match.empty:
-                        idx = match.index[0]
-                        df.at[idx, 'Reply Text'] = reply_text
-                        df.at[idx, 'Reply Sentiment'] = sentiment
-                        print(f"✅ Reply from {sender_email} → {sentiment}")
-                    else:
-                        print(f"⚠️ Reply from unknown sender: {sender_email}")
+                    email_record.reply_text = reply_text
+                    email_record.reply_sentiment = sentiment
+                    print(f"✅ Reply from {sender_email} → {sentiment}")
                 except Exception as e:
                     print(f"⚠️ Error decoding reply from {sender_email}: {e}")
 
-    df.to_csv(sent_log, index=False)
-    df.to_csv(reply_log, index=False)
-    print("\n✅ Replies analyzed and saved.")
+    session.commit()
+    session.close()
+    print("\n✅ Replies analyzed and saved to DB.")
 
-# ---- CLI Entry Point ----
+
+# --------- CLI Entry Point ---------
 if __name__ == "__main__":
-    import sys
-
     if len(sys.argv) < 3:
         print("Usage: python analyze_replies.py <username> <campaign>")
         sys.exit(1)
 
-    user = sys.argv[1]
+    username = sys.argv[1]
     campaign = sys.argv[2]
-    analyze_replies(user, campaign)
+    analyze_replies(username, campaign)

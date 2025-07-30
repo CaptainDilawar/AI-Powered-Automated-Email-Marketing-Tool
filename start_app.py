@@ -4,6 +4,11 @@ import webbrowser
 import os
 import signal
 
+from database.db import engine
+from database.models import Base
+
+# Ensure database tables exist
+Base.metadata.create_all(bind=engine)
 # Get the absolute path to the project root
 ROOT = os.path.dirname(os.path.abspath(__file__))
 print(f"🌍 Project root directory: {ROOT}")
