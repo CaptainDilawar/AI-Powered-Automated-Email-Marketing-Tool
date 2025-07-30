@@ -1,1 +1,2 @@
-web: python backend/scraper.py
+web: streamlit run dashboard/Home.py
+scraper: python backend/scraper.py

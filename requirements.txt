@@ -16,3 +16,4 @@ certifi
 sqlalchemy
 xlsxwriter
 reportlab
+chromedriver-autoinstaller

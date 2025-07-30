@@ -1,5 +1,8 @@
 
 # --- Flask API ---
+
+import chromedriver_autoinstaller
+chromedriver_autoinstaller.install()
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
