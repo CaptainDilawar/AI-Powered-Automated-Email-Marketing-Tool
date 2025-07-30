@@ -29,10 +29,16 @@ from database.leads_crud import save_leads_to_db
 options = Options()
 options.add_argument("--ignore-certificate-errors")
 options.add_experimental_option("excludeSwitches", ["enable-logging"])
+
+import tempfile
+temp_profile = tempfile.mkdtemp()
+options.add_argument(f"--user-data-dir={temp_profile}")  # Avoid directory conflict
+
 service = Service(log_path=os.devnull)
 logging.getLogger('selenium').setLevel(logging.CRITICAL)
 
 driver = webdriver.Chrome(service=service, options=options)
+
 
 # --------- Get CLI Arguments ---------
 if len(sys.argv) < 3:
