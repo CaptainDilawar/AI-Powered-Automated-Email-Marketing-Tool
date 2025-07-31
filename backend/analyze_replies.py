@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 from imapclient import IMAPClient
 import pyzmail
 import sys
-import streamlit as st
 
 # Add root path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -13,15 +12,12 @@ from database.db import SessionLocal
 from database.models import Campaign, EmailContent, Lead, User
 
 # --------- Load Environment Variables ---------
-# load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-# EMAIL = os.getenv("EMAIL")
-# EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-# GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-# IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.gmail.com")
-EMAIL = st.secrets["EMAIL"]
-EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-IMAP_SERVER = st.secrets.get("IMAP_SERVER", "imap.gmail.com")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+EMAIL = os.getenv("EMAIL")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.gmail.com")
+
 
 # --------- Sentiment Classifier ---------
 def classify_reply_text(reply_text):

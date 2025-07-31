@@ -1,19 +1,14 @@
-#force update
-streamlit
-streamlit-authenticator==0.1.5
 pandas
 requests
 python-dotenv
 tqdm
 email-validator
 flask
+streamlit
 altair
 imapclient
 pyzmail36
 selenium
 beautifulsoup4
 certifi
-sqlalchemy
-xlsxwriter
-reportlab
-chromedriver-autoinstaller
+streamlit-authenticator

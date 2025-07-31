@@ -31,22 +31,9 @@ if not auth_status:
         st.warning("🔐 Please enter your credentials")
     st.stop()
 
+st.sidebar.success(f"✅ Logged in as: {username}")
+authenticator.logout("🚪 Logout", "sidebar")
 
-
-# Sidebar navigation logic
-if not auth_status:
-    st.sidebar.title("Navigation")
-    st.sidebar.page_link("pages/CreateCampaign.py", label="Create Campaign")
-    st.sidebar.page_link("pages/Register.py", label="Register")
-    st.sidebar.page_link("pages/SenderSettings.py", label="Sender Settings")
-else:
-    st.sidebar.success(f"✅ Logged in as: {username}")
-    authenticator.logout("🚪 Logout", "sidebar")
-    # Only show AdminDashboard if admin
-    if is_admin_user(username):
-        st.sidebar.page_link("pages/AdminDashboard.py", label="Admin Dashboard")
-    st.sidebar.page_link("pages/CreateCampaign.py", label="Create Campaign")
-    st.sidebar.page_link("pages/SenderSettings.py", label="Sender Settings")
 
 import database.db as db_mod
 db = SessionLocal()
@@ -59,8 +46,6 @@ admin = is_admin_user(username)
 
 # -------------------- Admin Dashboard --------------------
 if admin:
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🛠️ Admin Dashboard")
     st.title("🛠️ Admin Dashboard")
     users = db.execute(text("SELECT username, name, email, is_admin FROM users")).fetchall()
     if users:
@@ -141,26 +126,8 @@ if selected_campaign:
     
     if st.sidebar.button("🔍 Scrape Leads"):
         with st.spinner("Scraping leads for this campaign..."):
-            import requests
-            # Replace with your actual Flask API URL
-            FLASK_API_URL = "http://localhost:5000/scrape"  # Example: http://your-flask-api.com/scrape
-            payload = {"username": username, "campaign_name": selected_campaign}
-            try:
-                response = requests.post(FLASK_API_URL, json=payload, timeout=120)
-                if response.status_code == 200:
-                    data = response.json()
-                    leads = data.get("leads", [])
-                    st.success(f"✅ Leads scraped! Found {len(leads)} leads.")
-                    if leads:
-                        st.write("### Scraped Leads:")
-                        for lead in leads:
-                            st.write(lead)
-                    else:
-                        st.info("No leads found for this campaign.")
-                else:
-                    st.error(f"Error: {response.json().get('error', 'Unknown error')}")
-            except Exception as e:
-                st.error(f"Failed to connect to scraper API: {e}")
+            subprocess.run(["python", "backend/scraper.py", username, selected_campaign])
+        st.success("✅ Leads scraped and saved to database!")
     if st.sidebar.button("✉️ Generate and Send Emails"):
         with st.spinner("Generating and sending emails for this campaign..."):
             subprocess.run(["python", "backend/generate_emails.py", username, selected_campaign])
@@ -211,6 +178,7 @@ if campaign_obj:
     data = []
     if dashboard_mode == "Leads":
         results = db.query(Lead).filter_by(campaign_id=campaign_obj.id).all()
+        st.write("[DEBUG] Raw SQLAlchemy Lead objects for this campaign:", results)
         for lead in results:
             data.append({
                 "name": lead.name,

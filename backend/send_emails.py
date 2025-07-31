@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 import os
 import sys
 from pathlib import Path
-import streamlit as st
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -21,15 +20,11 @@ username = sys.argv[1]
 campaign_name = sys.argv[2]
 
 # --------- Load SMTP credentials from .env ---------
-# load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-# SMTP_SERVER = os.getenv("SMTP_SERVER")
-# SMTP_PORT = int(os.getenv("SMTP_PORT"))
-# SMTP_USERNAME = os.getenv("SMTP_USERNAME")
-# SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-SMTP_SERVER = st.secrets["SMTP_SERVER"]
-SMTP_PORT = int(st.secrets["SMTP_PORT"])
-SMTP_USERNAME = st.secrets["SMTP_USERNAME"]
-SMTP_PASSWORD = st.secrets["SMTP_PASSWORD"]
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+SMTP_SERVER = os.getenv("SMTP_SERVER")
+SMTP_PORT = int(os.getenv("SMTP_PORT"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # --------- DB Setup ---------
 session = SessionLocal()

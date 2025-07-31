@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 import csv
 import sys
 from pathlib import Path
-import streamlit as st
 import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from database.db import SessionLocal
@@ -22,10 +21,9 @@ user = sys.argv[1]
 campaign = sys.argv[2]
 # Folder creation removed; all data is stored in the database
 # --------- Load API Key ---------
-# env_path = Path(__file__).resolve().parent.parent / ".env"
-# load_dotenv(dotenv_path=env_path)
+env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # --------- Load Sender Info (User-specific) ---------
 from database.models import SenderConfig, User
