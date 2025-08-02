@@ -158,7 +158,7 @@ if campaign_obj:
     is_task_running = campaign_obj.status not in ["Idle", "Completed"] and not campaign_obj.status.startswith("Failed")
 
     import requests
-    API_URL = "http://localhost:8000"  # Change to deployed API URL as needed
+    API_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
     if st.sidebar.button("🔍 Scrape Leads", disabled=is_task_running):
         with st.spinner("Sending scrape request to the backend..."):

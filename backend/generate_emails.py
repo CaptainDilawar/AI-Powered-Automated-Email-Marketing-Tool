@@ -140,7 +140,8 @@ def convert_to_html(text, email_id):
     lines = text.strip().splitlines()
     html = "<p>" + "</p><p>".join(line.strip() for line in lines if line.strip()) + "</p>"
     # The tracking endpoint is now part of the FastAPI app on port 8000
-    tracking_pixel = f'<img src="http://localhost:8000/track_open?email_id={email_id}" width="1" height="1" alt="" style="display:none;">'
+    api_base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
+    tracking_pixel = f'<img src="{api_base_url}/track_open?email_id={email_id}" width="1" height="1" alt="" style="display:none;">'
     return html + tracking_pixel
 
 def generate_emails_for_campaign(username: str, campaign_name: str):

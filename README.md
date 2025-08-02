@@ -80,6 +80,7 @@ REPLY_TO_EMAIL="yourmail@gmail.com"
 IMAP_SERVER="imap.gmail.com"
 EMAIL="yourmail@gmail.com"
 EMAIL_PASSWORD="your_google_app_password"
+API_BASE_URL="http://localhost:8000"
 ```
 
 ### 3. Register Users

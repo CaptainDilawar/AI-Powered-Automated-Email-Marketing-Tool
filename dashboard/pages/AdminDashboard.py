@@ -44,28 +44,6 @@ st.title("🛠️ Admin Dashboard")
 
 db = SessionLocal()
 
-# --- Admin Actions ---
-st.markdown("---")
-st.subheader("⚡ Admin Actions")
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("🚀 Run Full Campaign", use_container_width=True):
-        import subprocess
-        result = subprocess.run([sys.executable, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../backend/run_campaign.py'))], capture_output=True, text=True)
-        if result.returncode == 0:
-            st.success("Full campaign run completed successfully.")
-        else:
-            st.error(f"Error running campaign: {result.stderr}")
-with col2:
-    if st.button("📬 Run Reply Analysis", use_container_width=True):
-        import subprocess
-        result = subprocess.run([sys.executable, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../backend/analyze_replies.py'))], capture_output=True, text=True)
-        if result.returncode == 0:
-            st.success("Reply analysis completed successfully.")
-        else:
-            st.error(f"Error running reply analysis: {result.stderr}")
-st.markdown("---")
-
 # --- Show registered users ---
 st.subheader("👤 Registered Users")
 
