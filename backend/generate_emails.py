@@ -11,14 +11,6 @@ import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from database.db import SessionLocal
 from database.models import Campaign, Lead, EmailContent, User
-
-# --------- Get username ---------
-if len(sys.argv) < 3:
-    print("Usage: python generate_emails.py <username>")
-    sys.exit(1)
-
-user = sys.argv[1]
-campaign = sys.argv[2]
 # Folder creation removed; all data is stored in the database
 # --------- Load API Key ---------
 env_path = Path(__file__).resolve().parent.parent / ".env"
@@ -26,27 +18,6 @@ load_dotenv(dotenv_path=env_path)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # --------- Load Sender Info (User-specific) ---------
-from database.models import SenderConfig, User
-
-# --- Fetch sender config from DB ---
-session = SessionLocal()
-db_user = session.query(User).filter_by(username=user).first()
-if not db_user:
-    print(f"❌ User '{user}' not found.")
-    sys.exit(1)
-
-sender_config = session.query(SenderConfig).filter_by(user_id=db_user.id).first()
-if not sender_config:
-    print(f"❌ Sender config not found for user '{user}'. Please set it from the Sender Settings UI.")
-    sys.exit(1)
-
-SENDER_INFO = {
-    "company_name": sender_config.company_name,
-    "sender_name": sender_config.sender_name,
-    "sender_email": sender_config.sender_email,
-    "website": sender_config.website,
-    "phone": sender_config.phone
-}
 
 
 # --------- Industry Role Mapping ---------
@@ -60,13 +31,13 @@ INDUSTRY_ROLES = {
     "Education": "School Administrator"
 }
 
-def create_prompt(row, service="Website Development"):
+def create_prompt(row, sender_info, service="Website Development"):
     # Sender details from user config
-    company_name = SENDER_INFO["company_name"]
-    sender_name = SENDER_INFO["sender_name"]
-    sender_email = SENDER_INFO["sender_email"]
-    website = SENDER_INFO["website"]
-    phone = SENDER_INFO["phone"]
+    company_name = sender_info["company_name"]
+    sender_name = sender_info["sender_name"]
+    sender_email = sender_info["sender_email"]
+    website = sender_info["website"]
+    phone = sender_info["phone"]
 
     # Lead details
     industry = row['Industry']
@@ -165,63 +136,108 @@ def generate_from_groq(prompt):
 
     return "ERROR", "ERROR"
 
-def convert_to_html(text, lead_id):
+def convert_to_html(text, email_id):
     lines = text.strip().splitlines()
     html = "<p>" + "</p><p>".join(line.strip() for line in lines if line.strip()) + "</p>"
-    tracking_pixel = f'<img src="http://localhost:5000/track_open?lead_id={lead_id}" width="1" height="1" alt="" style="display:none;">'
+    # The tracking endpoint is now part of the FastAPI app on port 8000
+    tracking_pixel = f'<img src="http://localhost:8000/track_open?email_id={email_id}" width="1" height="1" alt="" style="display:none;">'
     return html + tracking_pixel
 
-def main():
+def generate_emails_for_campaign(username: str, campaign_name: str):
+    """
+    Generates email content for all leads in a specific campaign for a given user.
+    """
     session = SessionLocal()
+    campaign_obj = None
+    try:
+        # --- Fetch user object first ---
+        user_obj = session.query(User).filter_by(username=username).first()
+        if not user_obj:
+            print(f"❌ User '{username}' not found.")
+            return
 
-    # --- Fetch user object first ---
-    user_obj = session.query(User).filter_by(username=user).first()
-    if not user_obj:
-        print(f"❌ User '{user}' not found.")
-        return
+        # --- Fetch sender config from DB ---
+        from database.models import SenderConfig
+        sender_config = session.query(SenderConfig).filter_by(user_id=user_obj.id).first()
+        if not sender_config:
+            print(f"❌ Sender config not found for user '{username}'. Please set it from the Sender Settings UI.")
+            return
 
-    # --- Fetch campaign using user_id ---
-    campaign_obj = session.query(Campaign).filter_by(user_id=user_obj.id, name=campaign).first()
-    if not campaign_obj:
-        print(f"❌ Campaign '{campaign}' not found for user '{user}'")
-        return
+        sender_info = {
+            "company_name": sender_config.company_name,
+            "sender_name": sender_config.sender_name,
+            "sender_email": sender_config.sender_email,
+            "website": sender_config.website,
+            "phone": sender_config.phone
+        }
 
-    leads = session.query(Lead).filter_by(campaign_id=campaign_obj.id).all()
-    if not leads:
-        print("⚠️ No leads found in database.")
-        return
+        # --- Fetch campaign using user_id ---
+        campaign_obj = session.query(Campaign).filter_by(user_id=user_obj.id, name=campaign_name).first()
+        if not campaign_obj:
+            print(f"❌ Campaign '{campaign_name}' not found for user '{username}'")
+            return
 
-    print(f"\n📬 Generating emails using Groq API for {len(leads)} leads...\n")
+        campaign_obj.status = "Generating Emails"
+        session.commit()
 
-    for lead in tqdm(leads):
-        prompt = create_prompt({
-            "Industry": lead.industry,
-            "State": lead.state,
-            "Platform Source": lead.platform_source,
-            "Profile Description": lead.profile_description
-        })
-        subject, email = generate_from_groq(prompt)
-        email_html = convert_to_html(email, lead_id=lead.id)
+        all_leads = session.query(Lead).filter_by(campaign_id=campaign_obj.id).all()
+        if not all_leads:
+            print("⚠️ No leads found in database for this campaign.")
+            return
 
-        print(f"\nLead ID: {lead.id}")
-        print(f"Subject: {subject}")
-        print(f"Email: {email[:100]}...")
-        print(f"HTML: {email_html[:100]}...")
+        # --- Get leads that don't have email content yet ---
+        existing_email_lead_ids = {
+            result[0] for result in session.query(EmailContent.lead_id)
+            .filter(EmailContent.campaign_id == campaign_obj.id)
+            .all()
+        }
+        leads_to_process = [lead for lead in all_leads if lead.id not in existing_email_lead_ids]
 
-        # Save to DB
-        email_content = EmailContent(
-            lead_id=lead.id,
-            campaign_id=campaign_obj.id,
-            subject=subject,
-            body=email,
-            html=email_html
-        )
-        session.add(email_content)
+        if not leads_to_process:
+            print("✅ All leads already have generated emails. Nothing to do.")
+            return
 
-    session.commit()
-    session.close()
-    print("\n✅ Emails saved to database.")
+        print(f"\n📬 Generating emails using Groq API for {len(leads_to_process)} new leads...\n")
+
+        for lead in tqdm(leads_to_process):
+            prompt = create_prompt({
+                "Industry": lead.industry,
+                "State": lead.state,
+                "Platform Source": lead.platform_source,
+                "Profile Description": lead.profile_description
+            }, sender_info)
+            subject, email = generate_from_groq(prompt)
+
+            # Create a placeholder first to get an ID
+            email_content = EmailContent(
+                lead_id=lead.id,
+                campaign_id=campaign_obj.id,
+                subject=subject,
+                body=email
+            )
+            session.add(email_content)
+            session.flush()  # Assigns an ID to email_content without committing
+
+            # Now generate HTML with the correct ID and update the object
+            email_html = convert_to_html(email, email_id=email_content.id)
+            email_content.html = email_html
+
+        session.commit()
+        campaign_obj.status = "Idle"
+        session.commit()
+        print("\n✅ Emails saved to database.")
+    finally:
+        if 'campaign_obj' in locals() and campaign_obj and session.is_active:
+            if campaign_obj.status not in ["Idle", "Completed"]:
+                 campaign_obj.status = "Failed: Email generation error"
+                 session.commit()
+        session.close()
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) < 3:
+        print("Usage: python generate_emails.py <username> <campaign_name>")
+        sys.exit(1)
+    username_cli = sys.argv[1]
+    campaign_name_cli = sys.argv[2]
+    generate_emails_for_campaign(username_cli, campaign_name_cli)

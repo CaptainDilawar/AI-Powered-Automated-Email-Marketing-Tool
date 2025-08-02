@@ -15,7 +15,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from itertools import product
 import logging
 
@@ -23,24 +23,6 @@ import logging
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from database.db import SessionLocal
 from database.models import User, Campaign, SenderConfig, Lead
-from database.leads_crud import save_leads_to_db
-
-# Setup browser
-options = Options()
-options.add_argument("--ignore-certificate-errors")
-options.add_experimental_option("excludeSwitches", ["enable-logging"])
-service = Service(log_path=os.devnull)
-logging.getLogger('selenium').setLevel(logging.CRITICAL)
-
-driver = webdriver.Chrome(service=service, options=options)
-
-# --------- Get CLI Arguments ---------
-if len(sys.argv) < 3:
-    print("Usage: python scraper.py <username> <campaign_name>")
-    sys.exit(1)
-
-username = sys.argv[1]
-campaign_name = sys.argv[2]
 
 # --------- Constants ---------
 USER_AGENTS = [
@@ -54,11 +36,11 @@ DORK_PATTERNS = [
     'site:{site_domain} "{industry}" "{location}" "@gmail.com"',
     'site:{site_domain} "{industry}" "{location}" intext:email',
     'site:{site_domain} "{industry}" "{location}" contact',
-    # 'site:{site_domain} "{industry}" "{location}" "contact us"',
-    # 'site:{site_domain} "{industry}" "{location}" inurl:contact',
-    # 'site:{site_domain} "{industry}" "{location}" intitle:contact',
-    # 'site:{site_domain} "{industry}" "{location}" "@yahoo.com"',
-    # 'site:{site_domain} "{industry}" "{location}" "@outlook.com"'
+    'site:{site_domain} "{industry}" "{location}" "contact us"',
+    'site:{site_domain} "{industry}" "{location}" inurl:contact',
+    'site:{site_domain} "{industry}" "{location}" intitle:contact',
+    'site:{site_domain} "{industry}" "{location}" "@yahoo.com"',
+    'site:{site_domain} "{industry}" "{location}" "@outlook.com"'
 ]
 
 # --------- Utility Functions ---------
@@ -75,10 +57,31 @@ def is_captcha_present(driver):
     except Exception:
         return False
 
-def scrape_google(driver, combinations):
+def scrape_google(combinations):
+    """
+    Initializes a headless Selenium driver, scrapes Google for leads based on combinations,
+    and returns a list of leads. The driver is managed entirely within this function.
+    """
+    # Setup browser inside the function for thread safety and server environment
+    options = Options()
+    # The "--headless" argument is commented out to make the browser window visible for solving CAPTCHAs.
+    # options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920x1080")
+    options.add_argument("--ignore-certificate-errors")
+    options.add_experimental_option("excludeSwitches", ["enable-logging"])
+    service = Service(log_path=os.devnull)
+    logging.getLogger('selenium').setLevel(logging.CRITICAL)
+
+    try:
+        driver = webdriver.Chrome(service=service, options=options)
+    except WebDriverException as e:
+        print(f"❌ Failed to start WebDriver: {e}. Ensure chromedriver is installed and in your PATH.")
+        return []
+
     leads = []
     email_pattern = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}"
-
     for platform, industry, location in combinations:
         site_domain = platform if '.' in platform else f"{platform}.com"
         for dork in DORK_PATTERNS:
@@ -161,48 +164,91 @@ def scrape_google(driver, combinations):
                 print(f"[ERROR] {e}")
                 continue
 
+    driver.quit()
     print(f"Total leads found: {len(leads)}")
     return leads
 
-# --------- Main ---------
-if __name__ == "__main__":
+def run_scraper_for_campaign(username: str, campaign_name: str):
+    """
+    A self-contained function to be called as a background task.
+    It handles DB connection, fetching campaign details, running the scraper,
+    and saving the results.
+    """
     session = SessionLocal()
+    campaign_obj = None
     try:
-        # Print absolute DB path for debug
-        import database.db as db_mod
-        print(f"[DEBUG] Using DB file: {db_mod.DB_PATH}")
-
+        print(f"[SCRAPER TASK] Starting for user '{username}', campaign '{campaign_name}'")
         user_obj = session.query(User).filter_by(username=username).first()
         if not user_obj:
             raise Exception(f"[ERROR] User '{username}' not found in DB.")
-        print(f"[DEBUG] user_id: {user_obj.id}")
 
         campaign_obj = session.query(Campaign).filter_by(user_id=user_obj.id, name=campaign_name).first()
         if not campaign_obj:
             raise Exception(f"[ERROR] Campaign '{campaign_name}' not found for user '{username}'.")
-        print(f"[DEBUG] campaign_id: {campaign_obj.id}")
 
-        # Fetch search configuration (customize this part if you store them differently)
+        # Set status after confirming campaign exists
+        campaign_obj.status = "Scraping"
+        session.commit()
+
         platforms = campaign_obj.platforms.split(",") if hasattr(campaign_obj, "platforms") else ["linkedin"]
         industries = campaign_obj.industries.split(",") if hasattr(campaign_obj, "industries") else ["tech"]
         locations = campaign_obj.locations.split(",") if hasattr(campaign_obj, "locations") else ["usa"]
 
         combinations = list(product(platforms, industries, locations))
-        leads = scrape_google(driver, combinations)
 
+        leads_data = scrape_google(combinations)
 
-        if leads:
-            from database.leads_crud import save_leads_to_db
-            save_leads_to_db(user_obj.id, campaign_name, leads)
-            print(f"[SUCCESS] Saved {len(leads)} leads to the database under campaign '{campaign_name}'.")
-            # Debug: count leads in DB for this campaign
-            lead_count = session.query(db_mod.Lead).filter_by(campaign_id=campaign_obj.id).count()
-            print(f"[DEBUG] Lead count in DB for campaign_id={campaign_obj.id}: {lead_count}")
+        if leads_data:
+            # Check for existing emails in this campaign to avoid duplicates
+            existing_emails = {
+                lead.email for lead in session.query(Lead.email)
+                .filter(Lead.campaign_id == campaign_obj.id)
+                .all()
+            }
+
+            new_leads_added = 0
+            for lead_dict in leads_data:
+                if lead_dict["email"] not in existing_emails:
+                    new_lead = Lead(
+                        name=lead_dict["name"],
+                        email=lead_dict["email"],
+                        platform_source=lead_dict["platform_source"],
+                        profile_link=lead_dict["profile_link"],
+                        state=lead_dict["state"],
+                        industry=lead_dict["industry"],
+                        profile_description=lead_dict["profile_description"],
+                        campaign_id=campaign_obj.id
+                    )
+                    session.add(new_lead)
+                    existing_emails.add(new_lead.email)  # Add to set to prevent duplicates in same run
+                    new_leads_added += 1
+
+            if new_leads_added > 0:
+                session.commit()
+                campaign_obj.status = "Idle"
+                print(f"[SCRAPER TASK] SUCCESS: Saved {new_leads_added} new leads for campaign '{campaign_name}'.")
+            else:
+                campaign_obj.status = "Idle"
+                print(f"[SCRAPER TASK] INFO: Scraped {len(leads_data)} leads, but all were duplicates of existing ones.")
         else:
-            print("[INFO] No leads found.")
-
+            campaign_obj.status = "Idle"
+            print(f"[SCRAPER TASK] INFO: No new leads found for campaign '{campaign_name}'.")
+        session.commit()
     except Exception as e:
-        print(f"[ERROR] Fatal error: {e}")
+        if campaign_obj:
+            campaign_obj.status = f"Failed: Scraping error"
+            session.commit()
+        print(f"[SCRAPER TASK] ERROR for campaign '{campaign_name}': {e}")
+        session.rollback()  # Rollback changes on error
     finally:
-        driver.quit()
         session.close()
+
+# --------- Main (for direct CLI execution) ---------
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python scraper.py <username> <campaign_name>")
+        sys.exit(1)
+
+    username_cli = sys.argv[1]
+    campaign_name_cli = sys.argv[2]
+    run_scraper_for_campaign(username_cli, campaign_name_cli)

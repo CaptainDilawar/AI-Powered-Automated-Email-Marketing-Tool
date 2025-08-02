@@ -1,57 +1,65 @@
-import subprocess
 import sys
 import os
-from pathlib import Path
-from analyze_replies import analyze_replies
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from database.db import SessionLocal
-from database.models import Campaign, EmailContent
 
-def run_scraper(user, campaign):
-    print("\n🕷️ [1/5] Running lead scraper...")
-    result = subprocess.run([sys.executable, "backend/scraper.py", user, campaign])
-    if result.returncode != 0:
-        print("❌ Scraper failed.")
-        sys.exit(1)
-    print("✅ Scraping completed.")
+# Import the refactored functions directly
+import backend.scraper as scraper_mod
+import backend.generate_emails as generate_emails_mod
+import backend.send_emails as send_emails_mod
+import backend.analyze_replies as analyze_replies_mod
 
-def run_generate(user, campaign):
-    print("\n🧠 [2/5] Generating emails...")
-    result = subprocess.run([sys.executable, "backend/generate_emails.py", user, campaign])
-    if result.returncode != 0:
-        print("❌ Email generation failed.")
-        sys.exit(1)
-    print("✅ Emails generated.")
+def run_campaign(username: str, campaign_name: str):
+    """
+    Orchestrates the full campaign workflow by calling the worker functions directly.
+    This is intended to be run as a background task.
+    """
+    print(f"\n🚀 Starting full campaign for user: {username}, campaign: {campaign_name}\n")
+    
+    try:
+        # Step 1: Scrape Leads
+        print("\n🕷️ [1/4] Running lead scraper...")
+        scraper_mod.run_scraper_for_campaign(username, campaign_name)
+        print("✅ Scraping completed.")
 
-def run_send(user, campaign):
-    print("\n📤 [3/5] Sending emails...")
-    result = subprocess.run([sys.executable, "backend/send_emails.py", user, campaign])
-    if result.returncode != 0:
-        print("❌ Sending failed.")
-        sys.exit(1)
-    print("✅ Emails sent.")
+        # Step 2: Generate Emails
+        print("\n🧠 [2/4] Generating emails...")
+        generate_emails_mod.generate_emails_for_campaign(username, campaign_name)
+        print("✅ Emails generated.")
 
-def run_reply_analysis(user, campaign):
-    print("\n📬 [5/5] Analyzing replies and classifying sentiments...")
-    analyze_replies(user, campaign)
+        # Step 3: Send Emails
+        print("\n📤 [3/4] Sending emails...")
+        send_emails_mod.send_emails_for_campaign(username, campaign_name)
+        print("✅ Emails sent.")
 
-def main():
-    if len(sys.argv) < 3:
-        print("[ERROR] Usage: python run_campaign.py <username> <campaign_name>")
-        sys.exit(1)
+        # Step 4: Analyze Replies
+        print("\n📬 [4/4] Analyzing replies and classifying sentiments...")
+        analyze_replies_mod.analyze_replies(username, campaign_name)
+        print("✅ Reply analysis complete.")
+        
+        print(f"\n🎉 Full campaign for '{campaign_name}' completed successfully.")
+        return {"status": "success", "message": "Full campaign executed successfully."}
+    except Exception as e:
+        print(f"❌ Full campaign run failed for campaign '{campaign_name}': {e}")
+        raise # Re-raise the exception so FastAPI logs the background task failure
 
-    user = sys.argv[1]
-    campaign = sys.argv[2]
+def generate_and_send_emails(username: str, campaign_name: str):
+    """
+    Orchestrates generating and then sending emails for a campaign in the correct sequence.
+    """
+    print(f"\n🚀 Starting Generate & Send for user: {username}, campaign: {campaign_name}\n")
+    try:
+        # Step 1: Generate Emails
+        print("\n🧠 [1/2] Generating emails...")
+        generate_emails_mod.generate_emails_for_campaign(username, campaign_name)
+        print("✅ Emails generated.")
 
-    print(f"\n🚀 Starting full campaign for user: {user}, campaign: {campaign}\n")
-
-    run_scraper(user, campaign)
-    run_generate(user, campaign)
-    run_send(user, campaign)
-    # merge_opens(user, campaign)  # Removed, open tracking is now DB-only
-    run_reply_analysis(user, campaign)
-
-    print(f"\n🎉 All done for user: {user}, campaign: {campaign}. Check the database for results.")
-
-if __name__ == "__main__":
-    main()
+        # Step 2: Send Emails
+        print("\n📤 [2/2] Sending emails...")
+        send_emails_mod.send_emails_for_campaign(username, campaign_name)
+        print("✅ Emails sent.")
+        
+        print(f"\n🎉 Generate & Send for '{campaign_name}' completed successfully.")
+    except Exception as e:
+        print(f"❌ Generate & Send run failed for campaign '{campaign_name}': {e}")
+        raise

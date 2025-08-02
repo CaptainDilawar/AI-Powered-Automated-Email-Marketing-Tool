@@ -3,7 +3,7 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from pathlib import Path
-from user_auth import add_user, user_exists
+from user_auth import add_user, user_exists, get_authenticator
 
 st.set_page_config(page_title="📝 Register", layout="centered")
 st.title("📝 Create Your Account")
@@ -31,6 +31,13 @@ with st.form("register"):
         elif len(password) < 6:
             st.warning("🔐 Password should be at least 6 characters.")
         else:
-            add_user(name, username, password, email)
-            st.success("✅ Registered successfully! You can now log in.")
-            st.balloons()
+            if add_user(name, username, password, email):
+                st.success("✅ Registered successfully! Please log in.")
+                st.balloons()
+                # Clear session state to ensure previous user is logged out
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.switch_page("Home.py")
+            else:
+                # Since we already check for username, this error must be for the email
+                st.error("❌ Email is already in use.")

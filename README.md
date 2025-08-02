@@ -1,4 +1,3 @@
-
 # 🤖 AI-Powered Automated Email Marketing Tool
 
 This project is a full-stack, multi-user platform for running personalized cold email campaigns using AI. It features lead scraping, AI-generated emails, automated sending, open/reply tracking, and advanced analytics—all managed through a modern Streamlit dashboard.
@@ -7,180 +6,136 @@ This project is a full-stack, multi-user platform for running personalized cold 
 
 ## 📦 Features
 
-- � Secure login and multi-user management
-- 🛠️ Admin dashboard: view all users, campaign activity, and delete users/campaigns with all related data
-- �🔍 Google-based lead scraping
-- 🧠 AI-generated emails (Groq + LLaMA3)
-- ✉️ Automated email sending (SMTP)
-- 📬 Open tracking and reply sentiment analysis
-- 📊 Real-time campaign analytics: leads, sent emails, open rates, replies
-- � Interactive charts and live reply viewer
-- 📂 Export campaign results as CSV, Excel, or PDF
-- 🧑‍� User dashboard: manage sender profile, campaigns, and view results
+- 🔐 Secure login and multi-user management
+- 🛠️ **Admin Dashboard**: View all users, campaign activity, and delete users/campaigns with all related data.
+- 🔍 **Lead Scraping**: Google-based lead scraping to find potential customers.
+- 🧠 **AI-Generated Emails**: Utilizes Groq and LLaMA3 to create personalized emails.
+- ✉️ **Automated Email Sending**: Sends emails automatically via SMTP.
+- 📬 **Tracking and Analysis**: Tracks email opens and analyzes the sentiment of replies.
+- 📊 **Real-Time Analytics**: View leads, sent emails, open rates, and replies in real-time.
+- 📈 **Interactive Dashboard**: Includes interactive charts and a live reply viewer.
+- 📂 **Data Export**: Export campaign results to CSV, Excel, or PDF.
+- 🧑‍💻 **User Dashboard**: Manage sender profile, campaigns, and view results.
 
 ---
 
 ## ⚙️ Project Structure
 
+```
 .
 ├── .streamlit/
-|       |── config.toml
+│   └── config.toml
 ├── backend/
-│   ├── scraper.py
-│   ├── generate_emails.py
-│   ├── send_emails.py
+│   ├── api.py
 │   ├── analyze_replies.py
-│   └── run_campaign.py
-│
-├── server/
-│   └── open_tracker.py
-│
+│   ├── generate_emails.py
+│   ├── run_campaign.py
+│   ├── scraper.py
+│   └── send_emails.py
 ├── dashboard/
-│   |── Home.py  # Main Streamlit dashboard
-|   |── pages
-|        |──AdminDashboard.py
-|        |──CreateCampaign.py
-|        |──Register.py
-|        └──SenderSettings.py
-│
+│   ├── Home.py
+│   └── pages/
+│       ├── AdminDashboard.py
+│       ├── CreateCampaign.py
+│       ├── HowItWorks.py
+│       ├── Register.py
+│       └── SenderSettings.py
 ├── database/
 │   ├── db.py
-│   ├── models.py
-│   ├── leads_crud.py
-│   └── initialize_db.py
-│
+│   └── models.py
+├── static/
+│   └── pixel.png
+├── .gitignore
+├── app.db
+├── README.md
+├── requirements.txt
+├── scraper_errors.log
 ├── start_app.py
-├── .env
-├── app.db  # SQLite database
-├── user_auth.py
-└── static/
-    └── pixel.png
+└── user_auth.py
+```
 
 ---
 
 ## 🛠️ Setup Instructions
 
-### 1. 📦 Install Python Dependencies
+### 1. Install Python Dependencies
 
-Install Python 3.10+ and dependencies:
+Ensure you have Python 3.10+ installed, then run:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Or manually install the important ones:
+### 2. Environment Variables
 
-```bash
-pip install streamlit selenium pandas flask imapclient pyzmail requests python-dotenv xlsxwriter reportlab sqlalchemy
-```
-
-### 2. 🔐 Environment Variables
-
-Create a `.env` file in the root:
+Create a `.env` file in the root directory with the following variables:
 
 ```
-GROQ_API_KEY = "your_groq_api_key"
-SMTP_SERVER = "smtp-relay.brevo.com"
-SMTP_PORT = 587
-SMTP_USERNAME = "yourmail@gmail.com"
-SMTP_PASSWORD = "your_smtp_password"
-REPLY_TO_EMAIL = "yourmail@gmail.com"
-IMAP_SERVER = "imap.gmail.com"
-EMAIL = "yourmail@gmail.com"
-EMAIL_PASSWORD = "your_google_app_password"
+GROQ_API_KEY="your_groq_api_key"
+SMTP_SERVER="smtp-relay.brevo.com"
+SMTP_PORT=587
+SMTP_USERNAME="yourmail@gmail.com"
+SMTP_PASSWORD="your_smtp_password"
+REPLY_TO_EMAIL="yourmail@gmail.com"
+IMAP_SERVER="imap.gmail.com"
+EMAIL="yourmail@gmail.com"
+EMAIL_PASSWORD="your_google_app_password"
 ```
 
-### 3. 👤 Register Users
-Register Users from the Register Page
+### 3. Register Users
 
+Create new user accounts through the **Register** page on the dashboard.
 
-### 4. 🧑‍💼 Start App & Login
+### 4. Start the Application
 
-Start the app with:
+To start the backend server and the Streamlit dashboard, run:
 
 ```bash
 python start_app.py
 ```
 
-Launch the Streamlit dashboard at [http://localhost:8501](http://localhost:8501)
+The dashboard will be available at [http://localhost:8501](http://localhost:8501).
 
-Start the tracker server if needed.
+### 5. Configure Sender Profile
 
-### 5. ⚙️ Configure Sender Profile
-
-Once logged in, go to Sender Settings in the dashboard sidebar and save:
-
+After logging in, navigate to **Sender Settings** and provide the following:
 - Sender name
 - Company name
 - Email
 - Website
 - Phone number
 
-### 6. 🎯 Create and Manage Campaigns
+### 6. Create and Manage Campaigns
 
-Use the dashboard to:
-
-- Set your service
-- Choose target industries, states, and platforms
-- Scrape leads, generate emails, send campaigns, analyze replies
-- View campaign analytics and export results
+From the dashboard, you can:
+- Define your service or product.
+- Specify target industries, locations, and platforms for lead scraping.
+- Scrape leads, generate emails, send campaigns, and analyze replies.
+- Monitor campaign analytics and export the results.
 
 ---
 
 ## 🚀 Workflow Overview
 
-1. **Lead Scraping** from Google using advanced dorks
-2. **Email Generation** using AI (Groq / LLaMA3)
-3. **SMTP Sending** using sender config
-4. **Open Tracking** and reply analysis
-5. **Sentiment Classification** for replies
-6. **Admin Controls** for user/campaign management
-7. **Data Export** (CSV, Excel, PDF)
+1.  **Lead Scraping**: Scrapes leads from Google using advanced search queries.
+2.  **Email Generation**: Generates personalized emails using AI (Groq / LLaMA3).
+3.  **Email Sending**: Sends emails via SMTP using the sender's configuration.
+4.  **Tracking and Analysis**: Tracks email opens and analyzes reply sentiment.
+5.  **Admin Oversight**: Admins can manage users and campaigns.
+6.  **Data Export**: Export campaign data to CSV, Excel, or PDF.
 
-All campaign, sender, lead, email, open tracking, and reply analysis data is stored in the SQLite database (`app.db`). All data is managed through the dashboard and backend scripts.
+All data is stored in the `app.db` SQLite database and managed through the dashboard and backend scripts.
 
 ---
 
 ## 🧯 Troubleshooting
 
-- ❌ CAPTCHA blocking: Try using VPN or wait before rerunning
-- ❌ Invalid SMTP login: Make sure `.env` has correct credentials
-- ❌ No leads scraped: Change industries/platforms/locations
+- **CAPTCHA Blocking**: If you encounter a CAPTCHA, try using a VPN or wait before running the scraper again.
+- **Invalid SMTP Login**: Ensure the credentials in your `.env` file are correct.
+- **No Leads Scraped**: Adjust the target industries, platforms, or locations in your campaign settings.
 
 ---
 
 ## 👨‍💻 Developed by
 
 Muhammad Dilawar Akram
-
-
----
-
-## 🛠️ Setup Instructions
-
-### 1. 📦 Install Python Dependencies
-
-Install Python 3.10+ and dependencies:
-
-```bash
-pip install -r requirements.txt
-
-Or manually install the important ones:
-
-pip install streamlit selenium pandas flask imapclient pyzmail requests python-dotenv xlsxwriter
-
-2. 🔐 Environment Variables
-Create a .env file in the root:
-GROQ_API_KEY = "gsk-afafadfkdfdfsdfhsdjhsdfhsdjkhfkdhf" #Take it from https://console.groq.com/keys
-#smtp brevo
-SMTP_SERVER = "smtp-relay.brevo.com" # SMTP Credentials from brevo.com. Through this server emails will be sent
-
----
-
-## ℹ️ Important Notes
-
-- **Reply Handling:** All replies from campaign recipients will be received in the inbox specified by the `EMAIL` and `EMAIL_PASSWORD` values in your `.env` file. The `REPLY_TO_EMAIL` sets the reply address shown to recipients, but replies are fetched from the configured IMAP inbox.
-- **User Registration:** Users should register via the Register page in the dashboard. Admins can manage users and campaigns from the Admin Dashboard.
-- **Data Storage:** All campaign, sender, lead, email, open tracking, and reply analysis data is stored in the SQLite database (`app.db`). No CSV or JSON files are used for campaign or sender configuration or results.
-
----

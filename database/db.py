@@ -1,20 +1,22 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from dotenv import load_dotenv
 import os
 
-
-
-# 📦 Use SQLite for local development (always use absolute path)
-import uuid
+# --- Load Environment Variables ---
+load_dotenv()
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 DB_PATH = os.path.join(BASE_DIR, 'app.db')
-# Add a cache-busting query param to force new connection on each rerun
-DB_CACHE_BUSTER = os.environ.get('DB_CACHE_BUSTER', str(uuid.uuid4()))
-DATABASE_URL = f"sqlite:///{DB_PATH}?cache_buster={DB_CACHE_BUSTER}"
 
-# For PostgreSQL (later): 
-# DATABASE_URL = "postgresql://username:password@localhost/dbname"
+# --- Database Encryption Setup ---
+DB_PASSWORD = os.getenv("DB_ENCRYPTION_KEY")
+if not DB_PASSWORD:
+    raise ValueError("DB_ENCRYPTION_KEY not set in .env file. Please set a strong password.")
+
+# The database file itself will not be encrypted, but sensitive columns will be,
+# using the key from the environment.
+DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 # 🔌 Create engine
 engine = create_engine(

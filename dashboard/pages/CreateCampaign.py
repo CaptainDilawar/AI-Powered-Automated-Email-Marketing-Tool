@@ -71,7 +71,7 @@ if submitted:
                 db.add(new_campaign)
                 db.commit()
 
-                st.success(f"✅ Campaign '{clean_name}' saved to database!")
+                st.success(f"✅ Campaign '{clean_name}' created!")
                 st.balloons()
 
         except IntegrityError:

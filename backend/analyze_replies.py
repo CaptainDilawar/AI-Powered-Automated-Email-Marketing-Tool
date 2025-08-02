@@ -1,7 +1,6 @@
 import os
 import requests
 from pathlib import Path
-from dotenv import load_dotenv
 from imapclient import IMAPClient
 import pyzmail
 import sys
@@ -9,14 +8,11 @@ import sys
 # Add root path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from database.db import SessionLocal
-from database.models import Campaign, EmailContent, Lead, User
+from database.models import Campaign, EmailContent, Lead, User, SenderConfig
 
-# --------- Load Environment Variables ---------
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-EMAIL = os.getenv("EMAIL")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+# --------- Load Environment Variables (only GROQ_API_KEY remains global) ---------
+# IMAP credentials are now fetched per-user from SenderConfig
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.gmail.com")
 
 
 # --------- Sentiment Classifier ---------
@@ -58,6 +54,7 @@ Just return: Positive, Neutral, or Negative.
 # --------- Analyze Replies ---------
 def analyze_replies(username, campaign_name):
     session = SessionLocal()
+    campaign_obj = None
 
     # Fetch user object
     user_obj = session.query(User).filter_by(username=username).first()
@@ -71,27 +68,52 @@ def analyze_replies(username, campaign_name):
         print(f"❌ Campaign '{campaign_name}' not found for user '{username}'")
         return
 
-    # Fetch related email content
-    email_records = session.query(EmailContent).filter_by(campaign_id=campaign_obj.id).all()
-    if not email_records:
+    campaign_obj.status = "Analyzing Replies"
+    session.commit()
+
+    # Use a join to fetch both EmailContent and Lead in one query, avoiding N+1 problem.
+    email_lead_pairs = session.query(EmailContent, Lead).join(Lead, EmailContent.lead_id == Lead.id).filter(EmailContent.campaign_id == campaign_obj.id).all()
+    if not email_lead_pairs:
+        campaign_obj.status = "Idle"
+        session.commit()
+
         print(f"⚠️ No emails found for campaign '{campaign_name}'")
         return
 
     # Map recipient emails to their records
     lead_map = {}
-    for email in email_records:
-        lead = session.query(Lead).filter_by(id=email.lead_id).first()
-        if lead and lead.email:
-            lead_map[lead.email.lower()] = (email, lead)
+    for email_record, lead_record in email_lead_pairs:
+        if lead_record and lead_record.email:
+            lead_map[lead_record.email.lower()] = (email_record, lead_record)
 
     if not lead_map:
+        campaign_obj.status = "Idle"
+        session.commit()
         print("⚠️ No leads with valid email addresses found.")
         return
 
 
+    # Fetch user's sender config for IMAP credentials
+    sender_config = session.query(SenderConfig).filter_by(user_id=user_obj.id).first()
+    if not sender_config or not sender_config.imap_email or not sender_config.imap_password or not sender_config.imap_server:
+        print(f"❌ IMAP credentials not configured for user '{username}'. Please update Sender Settings.")
+        campaign_obj.status = "Idle"
+        session.commit()
+        return
+
+    IMAP_EMAIL = sender_config.imap_email
+    IMAP_PASSWORD = sender_config.imap_password
+    IMAP_SERVER = sender_config.imap_server
+
     # Connect to IMAP
     with IMAPClient(IMAP_SERVER) as client:
-        client.login(EMAIL, EMAIL_PASSWORD)
+        try:
+            client.login(IMAP_EMAIL, IMAP_PASSWORD)
+        except Exception as e:
+            print(f"❌ Failed to log in to IMAP server for user '{username}': {e}")
+            campaign_obj.status = "Failed"
+            session.commit()
+            return
         client.select_folder('INBOX', readonly=False)
 
         all_uids = set()
@@ -101,6 +123,13 @@ def analyze_replies(username, campaign_name):
                 all_uids.update(uids)
             except Exception as e:
                 print(f"IMAP search failed for sender {addr}: {e}", flush=True)
+
+        if not all_uids:
+            print("✅ No new replies found in the inbox for this campaign's leads.")
+            campaign_obj.status = "Idle"
+            session.commit()
+            session.close()
+            return
 
         for uid in all_uids:
             raw = client.fetch([uid], ['BODY[]', 'ENVELOPE'])
@@ -125,6 +154,8 @@ def analyze_replies(username, campaign_name):
                 except Exception as e:
                     print(f"⚠️ Error decoding reply from {sender_email}: {e}")
 
+    session.commit()
+    campaign_obj.status = "Idle"
     session.commit()
     session.close()
     print("\n✅ Replies analyzed and saved to DB.")

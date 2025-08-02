@@ -21,7 +21,10 @@ from database.models import User, Campaign, Lead, SenderConfig, EmailContent
 
 st.set_page_config(page_title="📬 AI Automated Email Marketing Tool", layout="wide")
 
-authenticator = get_authenticator()
+if "authenticator" not in st.session_state:
+    st.session_state.authenticator = get_authenticator()
+
+authenticator = st.session_state.authenticator
 name, auth_status, username = authenticator.login("Login", "main")
 
 if not auth_status:
@@ -32,7 +35,10 @@ if not auth_status:
     st.stop()
 
 st.sidebar.success(f"✅ Logged in as: {username}")
-authenticator.logout("🚪 Logout", "sidebar")
+if st.sidebar.button("🚪 Logout"):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
 
 
 import database.db as db_mod
@@ -47,9 +53,21 @@ admin = is_admin_user(username)
 # -------------------- Admin Dashboard --------------------
 if admin:
     st.title("🛠️ Admin Dashboard")
-    users = db.execute(text("SELECT username, name, email, is_admin FROM users")).fetchall()
-    if users:
-        df_users = pd.DataFrame(users, columns=["username", "name", "email", "is_admin"])
+    # Use the ORM to fetch users. This is crucial because the ORM handles the
+    # automatic decryption of encrypted columns like 'name' and 'email'.
+    # Using a raw SQL query would fetch the raw, encrypted data.
+    all_users = db.query(User).all()
+    if all_users:
+        # Construct a list of dictionaries to build the DataFrame correctly
+        user_data = [
+            {
+                "username": u.username,
+                "name": u.name,      # This will be decrypted by the ORM
+                "email": u.email,    # This will also be decrypted
+                "is_admin": u.is_admin
+            } for u in all_users
+        ]
+        df_users = pd.DataFrame(user_data)
         st.subheader("👤 Registered Users")
         st.dataframe(df_users, use_container_width=True)
 
@@ -57,10 +75,11 @@ if admin:
         for user_row in df_users["username"]:
             u = db.query(User).filter_by(username=user_row).first()
             if u:
-                campaign_count = db.query(Campaign).filter_by(user_id=u.id).count()
-                total_emails = db.query(Lead).join(Campaign).filter(Campaign.user_id == u.id).count()
+                campaign_count = db.query(Campaign).filter(Campaign.user_id == u.id).count()
+                # Count emails marked as "Sent"
+                total_emails_sent = db.query(EmailContent).join(Campaign).filter(Campaign.user_id == u.id, EmailContent.delivery_status == "Sent").count()
                 display_name = u.name if u.name else u.username
-                st.markdown(f"**📂 {display_name}** — {total_emails} emails sent across {campaign_count} campaigns")
+                st.markdown(f"**📂 {display_name}** — {total_emails_sent} emails sent across {campaign_count} campaigns")
 
         # --- Admin: Delete User Functionality ---
         st.subheader("🗑️ Delete a User")
@@ -68,17 +87,9 @@ if admin:
         if st.button("Delete Selected User", key="delete_user_btn"):
             with st.spinner(f"Deleting user '{user_to_delete}' and all related data..."):
                 del_user = db.query(User).filter_by(username=user_to_delete).first()
+                # With cascade="all, delete-orphan" on the User model's relationships,
+                # SQLAlchemy will automatically delete all associated campaigns, leads, emails, and sender configs.
                 if del_user:
-                    # Delete all campaigns, leads, sender config, and email content for this user
-                    campaigns = db.query(Campaign).filter_by(user_id=del_user.id).all()
-                    for campaign in campaigns:
-                        leads = db.query(Lead).filter_by(campaign_id=campaign.id).all()
-                        for lead in leads:
-                            db.query(EmailContent).filter_by(lead_id=lead.id).delete()
-                        db.query(Lead).filter_by(campaign_id=campaign.id).delete()
-                        db.query(EmailContent).filter_by(campaign_id=campaign.id).delete()
-                        db.query(Campaign).filter_by(id=campaign.id).delete()
-                    db.query(SenderConfig).filter_by(user_id=del_user.id).delete()
                     db.delete(del_user)
                     db.commit()
                     st.success(f"✅ User '{user_to_delete}' and all related data deleted!")
@@ -91,9 +102,11 @@ if admin:
 
 # -------------------- Campaign Actions --------------------
 
-st.title(f"📬 AI Email Campaign Dashboard — Welcome {name}")
+st.title(f"📬 AI Email Marketing Tool — Welcome {name}")
 # Add Refresh Button
 if st.button("🔄 Refresh Dashboard"):
+    # Reset the action flag to re-enable buttons and hide the 'in progress' message.
+    st.session_state.action_in_progress = False
     st.rerun()
 
 # Sender Settings
@@ -118,35 +131,74 @@ if not campaigns:
     st.stop()
 
 campaign_names = [c.name for c in campaigns]
-selected_campaign = st.sidebar.selectbox("📂 Select a Campaign", campaign_names)
+
+# --- State management for selected campaign to persist selection across reruns ---
+# Get the index of the last selected campaign, default to 0 if not set
+default_index = 0
+if 'selected_campaign_name' in st.session_state:
+    try:
+        # Find the index of the previously selected campaign
+        default_index = campaign_names.index(st.session_state.selected_campaign_name)
+    except ValueError:
+        # This handles cases where the campaign was deleted. Default to the first campaign.
+        default_index = 0
+
+selected_campaign = st.sidebar.selectbox("📂 Select a Campaign", campaign_names, index=default_index)
+# Store the current selection in session state so it's remembered on the next rerun
+st.session_state.selected_campaign_name = selected_campaign
 
 campaign_obj = db.query(Campaign).filter_by(user_id=user.id, name=selected_campaign).first()
 st.sidebar.markdown("### ⚙️ Campaign Actions")
-if selected_campaign:
+if campaign_obj:
     
-    if st.sidebar.button("🔍 Scrape Leads"):
-        with st.spinner("Scraping leads for this campaign..."):
-            subprocess.run(["python", "backend/scraper.py", username, selected_campaign])
-        st.success("✅ Leads scraped and saved to database!")
-    if st.sidebar.button("✉️ Generate and Send Emails"):
-        with st.spinner("Generating and sending emails for this campaign..."):
-            subprocess.run(["python", "backend/generate_emails.py", username, selected_campaign])
-            subprocess.run(["python", "backend/send_emails.py", username, selected_campaign])
-        st.success("✅ Emails generated and sent!")
-    # Full campaign, re-analyze, and tracker server buttons remain unchanged
-    if st.sidebar.button("1️⃣ Run Full Campaign"):
-        with st.spinner("Running full campaign..."):
-            subprocess.run(["python", "backend/run_campaign.py", username, selected_campaign])
-        st.success("✅ Campaign completed!")
+    # Display the live status of the campaign
+    st.sidebar.markdown(f"**Status:** `{campaign_obj.status}`")
 
-    if st.sidebar.button("2️⃣ Re-analyze Replies"):
-        with st.spinner("Analyzing replies..."):
-            subprocess.run(["python", "backend/analyze_replies.py", username, selected_campaign])
-        st.success("✅ Reply analysis updated!")
+    # Disable buttons if a task is running.
+    is_task_running = campaign_obj.status not in ["Idle", "Completed"] and not campaign_obj.status.startswith("Failed")
 
-    if st.sidebar.button("3️⃣ Start Tracker Server"):
-        subprocess.Popen(["python", "server/open_tracker.py"])
-        st.success("📡 Open tracker started on port 5000")
+    import requests
+    API_URL = "http://localhost:8000"  # Change to deployed API URL as needed
+
+    if st.sidebar.button("🔍 Scrape Leads", disabled=is_task_running):
+        with st.spinner("Sending scrape request to the backend..."):
+            try:
+                resp = requests.post(f"{API_URL}/scrape_leads", json={"username": username, "campaign_name": selected_campaign})
+                resp.raise_for_status()
+                st.success("✅ Scrape task started! The browser window should appear shortly. Please refresh the dashboard in a few minutes to see the results.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Scrape failed: {e}")
+
+    if st.sidebar.button("🧠 Generate Emails", disabled=is_task_running):
+        with st.spinner("Starting email generation... This may take a moment."):
+            try:
+                resp = requests.post(f"{API_URL}/generate_emails", json={"username": username, "campaign_name": selected_campaign})
+                resp.raise_for_status()
+                st.success("✅ Email generation started! Refresh in a moment to review the email content.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Failed to start the email task: {e}")
+
+    if st.sidebar.button("📤 Send Generated Emails", disabled=is_task_running):
+        with st.spinner("Starting email sending process..."):
+            try:
+                resp = requests.post(f"{API_URL}/send_emails", json={"username": username, "campaign_name": selected_campaign})
+                resp.raise_for_status()
+                st.success("✅ Email sending started! Refresh in a moment to see delivery statuses.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Failed to start sending task: {e}")
+
+    if st.sidebar.button("🔄 Re-analyze Replies", disabled=is_task_running):
+        with st.spinner("Starting reply analysis..."):
+            try:
+                resp = requests.post(f"{API_URL}/analyze_replies", json={"username": username, "campaign_name": selected_campaign})
+                st.success("✅ Reply analysis started! Please refresh the dashboard in a few minutes to see the results.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Failed to start reply analysis: {e}")
+    
 else:
     st.sidebar.warning("⚠️ No campaign selected.")
 
@@ -158,101 +210,48 @@ if campaign_obj:
     st.sidebar.markdown("---")
     if st.sidebar.button("🗑️ Delete This Campaign"):
         with st.spinner("Deleting campaign and all related data..."):
-            leads = db.query(Lead).filter_by(campaign_id=campaign_obj.id).all()
-            for lead in leads:
-                db.query(EmailContent).filter_by(lead_id=lead.id).delete()
-            db.query(Lead).filter_by(campaign_id=campaign_obj.id).delete()
-            db.query(Campaign).filter_by(id=campaign_obj.id).delete()
+            # With the improved cascade settings, deleting the campaign object
+            # will automatically handle the deletion of all its associated leads and emails.
+            db.delete(campaign_obj)
             db.commit()
         st.success(f"✅ Campaign '{selected_campaign}' deleted!")
         st.rerun()
 
     # Show dashboard sections based on available data
-    leads_exist = db.query(Lead).filter_by(campaign_id=campaign_obj.id).count() > 0
-    emails_exist = db.query(EmailContent).filter_by(campaign_id=campaign_obj.id).count() > 0
-    sent_exist = db.query(Lead).filter_by(campaign_id=campaign_obj.id, delivery_status="Sent").count() > 0
 
     dashboard_mode = st.sidebar.radio("Show Data For", ["Leads", "Generated Emails", "Sent Emails", "All"], index=3)
 
-    # Query results based on mode (always fetch fresh from DB)
-    data = []
-    if dashboard_mode == "Leads":
-        results = db.query(Lead).filter_by(campaign_id=campaign_obj.id).all()
-        st.write("[DEBUG] Raw SQLAlchemy Lead objects for this campaign:", results)
-        for lead in results:
-            data.append({
-                "name": lead.name,
-                "email": lead.email,
-                "profile_link": lead.profile_link,
-                "state": lead.state,
-                "profile_description": lead.profile_description,
-                "delivery_status": lead.delivery_status,
-                "reply_text": lead.reply_text,
-                "reply_sentiment": lead.reply_sentiment,
-                "opened": "Yes" if lead.opened else "No",
-                "campaign_id": lead.campaign_id,
-                "platform_source": lead.platform_source,
-                "industry": lead.industry,
-                "email_subject": lead.email_subject,
-            })
-    elif dashboard_mode == "Generated Emails":
-        results = db.query(Lead, EmailContent).outerjoin(EmailContent, EmailContent.lead_id == Lead.id).filter(Lead.campaign_id == campaign_obj.id).all()
-        for lead, email in results:
-            data.append({
-                "name": lead.name,
-                "email": lead.email,
-                "profile_link": lead.profile_link,
-                "state": lead.state,
-                "profile_description": lead.profile_description,
-                "generated_email": email.body if email else None,
-                "delivery_status": lead.delivery_status,
-                "reply_text": lead.reply_text,
-                "reply_sentiment": lead.reply_sentiment,
-                "opened": "Yes" if lead.opened else "No",
-                "campaign_id": lead.campaign_id,
-                "platform_source": lead.platform_source,
-                "industry": lead.industry,
-                "email_subject": lead.email_subject or (email.subject if email else None),
-            })
+    # --- Refactored Data Loading ---
+    # We always need to join Lead and EmailContent now to get the full picture.
+    # We use an outer join to ensure we still see leads even if email hasn't been generated yet.
+    query = db.query(Lead, EmailContent).outerjoin(EmailContent, Lead.id == EmailContent.lead_id).filter(Lead.campaign_id == campaign_obj.id)
+
+    if dashboard_mode == "Generated Emails":
+        query = query.filter(EmailContent.id != None)
     elif dashboard_mode == "Sent Emails":
-        results = db.query(Lead, EmailContent).join(EmailContent, EmailContent.lead_id == Lead.id).filter(Lead.campaign_id == campaign_obj.id, Lead.delivery_status == "Sent").all()
-        for lead, email in results:
-            if email:
-                data.append({
-                    "name": lead.name,
-                    "email": lead.email,
-                    "profile_link": lead.profile_link,
-                    "state": lead.state,
-                    "profile_description": lead.profile_description,
-                    "generated_email": email.body,
-                    "delivery_status": lead.delivery_status,
-                    "reply_text": lead.reply_text,
-                    "reply_sentiment": lead.reply_sentiment,
-                    "opened": "Yes" if lead.opened else "No",
-                    "campaign_id": lead.campaign_id,
-                    "platform_source": lead.platform_source,
-                    "industry": lead.industry,
-                    "email_subject": lead.email_subject or email.subject,
-                })
-    else:
-        results = db.query(Lead, EmailContent).outerjoin(EmailContent, EmailContent.lead_id == Lead.id).filter(Lead.campaign_id == campaign_obj.id).all()
-        for lead, email in results:
-            data.append({
-                "name": lead.name,
-                "email": lead.email,
-                "profile_link": lead.profile_link,
-                "state": lead.state,
-                "profile_description": lead.profile_description,
-                "generated_email": email.body if email else None,
-                "delivery_status": lead.delivery_status,
-                "reply_text": lead.reply_text,
-                "reply_sentiment": lead.reply_sentiment,
-                "opened": "Yes" if lead.opened else "No",
-                "campaign_id": lead.campaign_id,
-                "platform_source": lead.platform_source,
-                "industry": lead.industry,
-                "email_subject": lead.email_subject or (email.subject if email else None),
-            })
+        query = query.filter(EmailContent.delivery_status == "Sent")
+
+    results = query.all()
+    data = []
+    for result in results:
+        lead, email = result  # Result is always a tuple now
+
+        data.append({
+            "name": lead.name,
+            "email": lead.email,
+            "profile_link": lead.profile_link,
+            "state": lead.state,
+            "industry": lead.industry,
+            "platform_source": lead.platform_source,
+            "profile_description": lead.profile_description,
+            "email_subject": email.subject if email else None,
+            "generated_email": email.body if email else None,
+            "delivery_status": email.delivery_status if email else "Not Generated",
+            "opened": "Yes" if email and email.opened else "No",
+            "reply_text": email.reply_text if email else None,
+            "reply_sentiment": email.reply_sentiment if email else None,
+        })
+
     # st.write("[DEBUG] Raw leads data from DB:", data)
     df = pd.DataFrame(data)
     # if df.empty:
@@ -307,7 +306,7 @@ if campaign_obj:
         st.download_button("📊 Export as Excel", data=towrite.read(), file_name=f"{selected_campaign}.xlsx", key=f"download_excel_{dashboard_mode}")
 
     # PDF Export
-    if st.button("📄 Export to PDF (Stable)", key=f"export_pdf_{dashboard_mode}"):
+    if st.button("📄 Export to PDF", key=f"export_pdf_{dashboard_mode}"):
         try:
             buffer = BytesIO()
             selected_columns = ["name", "email", "platform_source", "state", "industry", "email_subject", "reply_sentiment", "opened"]

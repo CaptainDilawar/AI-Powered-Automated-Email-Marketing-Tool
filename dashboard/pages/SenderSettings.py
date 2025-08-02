@@ -46,6 +46,12 @@ with st.form("sender_form"):
     sender_email = st.text_input("Sender Email", value=sender_config.sender_email if sender_config else "")
     website = st.text_input("Website URL", value=sender_config.website if sender_config else "")
     phone = st.text_input("Phone Number", value=sender_config.phone if sender_config else "")
+
+    st.markdown("### IMAP Settings for Reply Analysis")
+    imap_server = st.text_input("IMAP Server", value=sender_config.imap_server if sender_config else "imap.gmail.com")
+    imap_email = st.text_input("IMAP Email", value=sender_config.imap_email if sender_config else "")
+    imap_password = st.text_input("IMAP App Password", type="password", value=sender_config.imap_password if sender_config else "")
+
     submitted = st.form_submit_button("💾 Save Settings")
 
     if submitted:
@@ -56,6 +62,9 @@ with st.form("sender_form"):
             sender_config.sender_email = sender_email.strip()
             sender_config.website = website.strip()
             sender_config.phone = phone.strip()
+            sender_config.imap_server = imap_server.strip()
+            sender_config.imap_email = imap_email.strip()
+            sender_config.imap_password = imap_password
         else:
             # Create new config
             sender_config = SenderConfig(
@@ -64,7 +73,10 @@ with st.form("sender_form"):
                 sender_name=sender_name.strip(),
                 sender_email=sender_email.strip(),
                 website=website.strip(),
-                phone=phone.strip()
+                phone=phone.strip(),
+                imap_server=imap_server.strip(),
+                imap_email=imap_email.strip(),
+                imap_password=imap_password
             )
             db.add(sender_config)
 
