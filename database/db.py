@@ -6,22 +6,24 @@ import os
 
 # --- Load Environment Variables ---
 load_dotenv()
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-DB_PATH = os.path.join(BASE_DIR, 'app.db')
 
 # --- Database Encryption Setup ---
-DB_PASSWORD = os.getenv("DB_ENCRYPTION_KEY")
-if not DB_PASSWORD:
+DB_ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY")
+if not DB_ENCRYPTION_KEY:
     raise ValueError("DB_ENCRYPTION_KEY not set in .env file. Please set a strong password.")
 
-# The database file itself will not be encrypted, but sensitive columns will be,
-# using the key from the environment.
-DATABASE_URL = f"sqlite:///{DB_PATH}"
+# --- PostgreSQL Connection Details ---
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "email_marketing_db")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres") # This is the DB connection password
+
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 # 🔌 Create engine
 engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}  # Required for SQLite
+    DATABASE_URL
 )
 
 # 🧠 Create session factory

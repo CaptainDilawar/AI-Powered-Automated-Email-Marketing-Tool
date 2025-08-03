@@ -16,3 +16,5 @@ bcrypt
 xlsxwriter
 reportlab
 python-multipart
+psycopg2-binary
+gunicorn
