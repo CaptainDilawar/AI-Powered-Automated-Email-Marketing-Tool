@@ -1,28 +1,19 @@
 print("=== Scraper started ===", flush=True)
 import sys
 import os
-import json
 import time
 import random
 import re
 import requests
 from pathlib import Path
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from itertools import product
 import logging
-
 # Setup paths
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from database.db import SessionLocal
-from database.models import User, Campaign, SenderConfig, Lead
+from database.models import User, Campaign, Lead
 
 # --------- Constants ---------
 USER_AGENTS = [
@@ -47,124 +38,106 @@ DORK_PATTERNS = [
 def has_website(text):
     return bool(re.search(r"https?://[\w.-]+|www\.[\w.-]+", text))
 
-def is_captcha_present(driver):
-    try:
-        return (
-            driver.find_elements(By.CSS_SELECTOR, 'form#captcha-form') or
-            driver.find_elements(By.CSS_SELECTOR, 'div#recaptcha') or
-            'detected unusual traffic' in driver.page_source.lower()
-        )
-    except Exception:
-        return False
+def is_captcha_present(page):
+    return page.query_selector('form#captcha-form') is not None or \
+           page.query_selector('div#recaptcha') is not None or \
+           "detected unusual traffic" in page.content().lower()
 
 def scrape_google(combinations):
     """
-    Initializes a headless Selenium driver, scrapes Google for leads based on combinations,
-    and returns a list of leads. The driver is managed entirely within this function.
+    Initializes a headless Playwright browser, scrapes Google for leads,
+    and returns a list of leads.
     """
-    # Setup browser inside the function for thread safety and server environment
-    options = Options()
-    # The "--headless" argument is commented out to make the browser window visible for solving CAPTCHAs.
-    # options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920x1080")
-    options.add_argument("--ignore-certificate-errors")
-    options.add_experimental_option("excludeSwitches", ["enable-logging"])
-    service = Service(log_path=os.devnull)
-    logging.getLogger('selenium').setLevel(logging.CRITICAL)
-
-    try:
-        driver = webdriver.Chrome(service=service, options=options)
-    except WebDriverException as e:
-        print(f"❌ Failed to start WebDriver: {e}. Ensure chromedriver is installed and in your PATH.")
-        return []
-
     leads = []
     email_pattern = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}"
-    for platform, industry, location in combinations:
-        site_domain = platform if '.' in platform else f"{platform}.com"
-        for dork in DORK_PATTERNS:
-            query = dork.format(site_domain=site_domain, industry=industry, location=location)
-            print(f"[SEARCH] {query}")
-            try:
-                user_agent = random.choice(USER_AGENTS)
-                driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": user_agent})
 
-                driver.get("https://www.google.com")
-                search_box = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.NAME, "q")))
-                search_box.clear()
-                search_box.send_keys(query)
-                search_box.send_keys(Keys.RETURN)
-                time.sleep(2)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True) # Always headless for server compatibility
+        page = browser.new_page(user_agent=random.choice(USER_AGENTS))
 
-                if is_captcha_present(driver):
-                    print("[CAPTCHA] CAPTCHA detected. Waiting for it to be solved...")
-                    for _ in range(90):
-                        time.sleep(1)
-                        if not is_captcha_present(driver):
-                            print("[CAPTCHA] CAPTCHA solved or bypassed.")
-                            break
-                    else:
-                        print("[CAPTCHA] Skipping query due to CAPTCHA.")
+        for platform, industry, location in combinations:
+            site_domain = platform if '.' in platform else f"{platform}.com"
+            for dork in DORK_PATTERNS:
+                query = dork.format(site_domain=site_domain, industry=industry, location=location)
+                print(f"[SEARCH] {query}")
+                try:
+                    page.goto("https://www.google.com", wait_until='networkidle', timeout=15000)
+                    
+                    search_box = page.locator('[name="q"]')
+                    search_box.fill(query)
+                    search_box.press("Enter")
+                    
+                    page.wait_for_load_state('networkidle', timeout=10000)
+
+                    if is_captcha_present(page):
+                        print("[CAPTCHA] CAPTCHA detected. Skipping query.")
                         continue
 
-                results = WebDriverWait(driver, 10).until(
-                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.tF2Cxc"))
-                )
+                    results = page.locator("div.tF2Cxc").all()
 
-                for result in results:
-                    try:
-                        title = result.find_element(By.CSS_SELECTOR, "h3.LC20lb").text
-                        link = result.find_element(By.CSS_SELECTOR, "a").get_attribute("href")
-                        description = result.find_element(By.CSS_SELECTOR, "div.VwiC3b").text
-
-                        print(f"Result title: {title}")
-                        print(f"Result description: {description}")
-                        print(f"Result link: {link}")
-
-                        profile_description = ""
-                        emails = set(re.findall(email_pattern, description))
-                        print(f"Emails found in description: {emails}")
+                    for result in results:
                         try:
-                            resp = requests.get(link, headers={"User-Agent": user_agent}, timeout=5)
-                            if resp.status_code == 200:
-                                soup = BeautifulSoup(resp.text, 'html.parser')
-                                meta = soup.find('meta', attrs={'name': 'description'})
-                                if meta:
-                                    profile_description = meta.get("content", "")
-                                page_emails = set(re.findall(email_pattern, resp.text))
-                                print(f"Emails found in linked page: {page_emails}")
-                                emails.update(page_emails)
+                            title_element = result.locator("h3.LC20lb")
+                            link_element = result.locator("a")
+                            description_element = result.locator("div.VwiC3b")
+
+                            title = title_element.inner_text() if title_element else ""
+                            link = link_element.get_attribute("href") if link_element else ""
+                            description = description_element.inner_text() if description_element else ""
+
+                            print(f"Result title: {title}")
+                            print(f"Result description: {description}")
+                            print(f"Result link: {link}")
+
+                            profile_description = ""
+                            emails = set(re.findall(email_pattern, description))
+                            print(f"Emails found in description: {emails}")
+
+                            if link:
+                                try:
+                                    # Use requests for fetching linked pages to avoid browser overhead
+                                    resp = requests.get(link, headers={"User-Agent": random.choice(USER_AGENTS)}, timeout=8)
+                                    if resp.status_code == 200:
+                                        soup = BeautifulSoup(resp.text, 'html.parser')
+                                        meta = soup.find('meta', attrs={'name': 'description'})
+                                        if meta:
+                                            profile_description = meta.get("content", "")
+                                        page_emails = set(re.findall(email_pattern, resp.text))
+                                        print(f"Emails found in linked page: {page_emails}")
+                                        emails.update(page_emails)
+                                except Exception as e:
+                                    print(f"Error fetching/parsing linked page: {e}")
+                                    pass
+
+                            if emails:
+                                print(f"Adding lead(s) with emails: {emails}")
+                                for email in emails:
+                                    leads.append({
+                                        "name": title,
+                                        "email": email.strip(),
+                                        "platform_source": platform.capitalize(),
+                                        "profile_link": link,
+                                        "website": "Yes" if has_website(description) else "No",
+                                        "state": location,
+                                        "industry": industry,
+                                        "profile_description": profile_description
+                                    })
+                            else:
+                                print("No emails found for this result.")
                         except Exception as e:
-                            print(f"Error fetching/parsing linked page: {e}")
-                            pass
+                            print(f"Error parsing result: {e}")
+                            continue
+                    
+                    time.sleep(random.uniform(2, 5)) # Random delay between searches
 
-                        if emails:
-                            print(f"Adding lead(s) with emails: {emails}")
-                            for email in emails:
-                                leads.append({
-                                    "name": title,
-                                    "email": email.strip(),
-                                    "platform_source": platform.capitalize(),
-                                    "profile_link": link,
-                                    "website": "Yes" if has_website(description) else "No",
-                                    "state": location,
-                                    "industry": industry,
-                                    "profile_description": profile_description
-                                })
-                        else:
-                            print("No emails found for this result.")
-                    except Exception as e:
-                        print(f"Error parsing result: {e}")
-                        continue
+                except PlaywrightTimeoutError:
+                    print(f"[TIMEOUT] Timed out searching for: {query}")
+                    continue
+                except Exception as e:
+                    print(f"[ERROR] {e}")
+                    continue
 
-                time.sleep(1)
-            except Exception as e:
-                print(f"[ERROR] {e}")
-                continue
-
-    driver.quit()
+        browser.close()
     print(f"Total leads found: {len(leads)}")
     return leads
 
@@ -186,60 +159,44 @@ def run_scraper_for_campaign(username: str, campaign_name: str):
         if not campaign_obj:
             raise Exception(f"[ERROR] Campaign '{campaign_name}' not found for user '{username}'.")
 
-        # Set status after confirming campaign exists
         campaign_obj.status = "Scraping"
         session.commit()
 
-        platforms = campaign_obj.platforms.split(",") if hasattr(campaign_obj, "platforms") else ["linkedin"]
-        industries = campaign_obj.industries.split(",") if hasattr(campaign_obj, "industries") else ["tech"]
-        locations = campaign_obj.locations.split(",") if hasattr(campaign_obj, "locations") else ["usa"]
+        platforms = campaign_obj.platforms.split(",") if hasattr(campaign_obj, "platforms") and campaign_obj.platforms else ["linkedin"]
+        industries = campaign_obj.industries.split(",") if hasattr(campaign_obj, "industries") and campaign_obj.industries else ["tech"]
+        locations = campaign_obj.locations.split(",") if hasattr(campaign_obj, "locations") and campaign_obj.locations else ["usa"]
 
         combinations = list(product(platforms, industries, locations))
-
         leads_data = scrape_google(combinations)
 
         if leads_data:
-            # Check for existing emails in this campaign to avoid duplicates
-            existing_emails = {
-                lead.email for lead in session.query(Lead.email)
-                .filter(Lead.campaign_id == campaign_obj.id)
-                .all()
-            }
-
+            existing_emails = {lead.email for lead in session.query(Lead.email).filter(Lead.campaign_id == campaign_obj.id).all()}
             new_leads_added = 0
             for lead_dict in leads_data:
                 if lead_dict["email"] not in existing_emails:
-                    new_lead = Lead(
-                        name=lead_dict["name"],
-                        email=lead_dict["email"],
-                        platform_source=lead_dict["platform_source"],
-                        profile_link=lead_dict["profile_link"],
-                        state=lead_dict["state"],
-                        industry=lead_dict["industry"],
-                        profile_description=lead_dict["profile_description"],
-                        campaign_id=campaign_obj.id
-                    )
+                    new_lead = Lead(**lead_dict, campaign_id=campaign_obj.id)
                     session.add(new_lead)
-                    existing_emails.add(new_lead.email)  # Add to set to prevent duplicates in same run
+                    existing_emails.add(new_lead.email)
                     new_leads_added += 1
-
+            
             if new_leads_added > 0:
                 session.commit()
                 campaign_obj.status = "Idle"
                 print(f"[SCRAPER TASK] SUCCESS: Saved {new_leads_added} new leads for campaign '{campaign_name}'.")
             else:
                 campaign_obj.status = "Idle"
-                print(f"[SCRAPER TASK] INFO: Scraped {len(leads_data)} leads, but all were duplicates of existing ones.")
+                print(f"[SCRAPER TASK] INFO: Scraped {len(leads_data)} leads, but all were duplicates.")
         else:
             campaign_obj.status = "Idle"
             print(f"[SCRAPER TASK] INFO: No new leads found for campaign '{campaign_name}'.")
+        
         session.commit()
     except Exception as e:
         if campaign_obj:
-            campaign_obj.status = f"Failed: Scraping error"
+            campaign_obj.status = "Failed: Scraping error"
             session.commit()
         print(f"[SCRAPER TASK] ERROR for campaign '{campaign_name}': {e}")
-        session.rollback()  # Rollback changes on error
+        session.rollback()
     finally:
         session.close()
 

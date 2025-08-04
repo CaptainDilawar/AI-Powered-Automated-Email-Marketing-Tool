@@ -12,19 +12,19 @@ DB_ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY")
 if not DB_ENCRYPTION_KEY:
     raise ValueError("DB_ENCRYPTION_KEY not set in .env file. Please set a strong password.")
 
-# --- PostgreSQL Connection Details ---
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "email_marketing_db")
-DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres") # This is the DB connection password
+# --- Database Connection Logic ---
+# Use DATABASE_URL for production (PostgreSQL), otherwise default to a local SQLite file.
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-# 🔌 Create engine
-engine = create_engine(
-    DATABASE_URL
-)
+if DATABASE_URL:
+    # Production setup (PostgreSQL)
+    engine = create_engine(DATABASE_URL)
+else:
+    # Local development setup (SQLite)
+    # The project_root is one level up from the `database` directory where this file is.
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    sqlite_path = os.path.join(project_root, "app.db")
+    engine = create_engine(f"sqlite:///{sqlite_path}")
 
 # 🧠 Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -32,7 +32,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # 🧱 Base class for all models
 Base = declarative_base()
 
-# 🧰 Dependency for getting DB session (can be used in Streamlit/Flask/FastAPI)
+# 🧰 Dependency for getting DB session
 def get_db():
     db = SessionLocal()
     try:
